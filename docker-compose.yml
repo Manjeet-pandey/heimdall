@@ -1,0 +1,40 @@
+# sandbox + checkpoint skeleton — Day 1 target
+# Agents: no DNS, no external route. Only checkpoint reaches the internet.
+networks:
+  agentnet:
+    internal: true
+  egress:
+services:
+  checkpoint:
+    image: mitmproxy/mitmproxy:11
+    command: mitmdump -s /app/checkpoint/addon.py --set body_size_limit=1048576
+    volumes:
+      - ./checkpoint:/app/checkpoint:ro
+    environment:
+      - HTTPS_PROXY=http://checkpoint:8080
+    networks:
+      - agentnet
+      - egress
+    ports:
+      - "127.0.0.1:8080:8080"  # proxy
+      - "127.0.0.1:8000:8000"  # review page (via review service in later days)
+    env_file:
+      - .env.secrets
+  coder:
+    image: python:3.12-slim
+    command: sleep infinity
+    user: "10000:10000"
+    read_only: true
+    volumes:
+      - ./agent-work/coder:/work:rw
+      - ./notes:/notes:ro
+    environment:
+      - HTTPS_PROXY=http://coder-user:coder-pass@checkpoint:8080
+      - HTTP_PROXY=http://coder-user:coder-pass@checkpoint:8080
+      - REQUESTS_CA_BUNDLE=/certs/mitmproxy-ca-cert.pem
+      - SSL_CERT_FILE=/certs/mitmproxy-ca-cert.pem
+      - NODE_EXTRA_CA_CERTS=/certs/mitmproxy-ca-cert.pem
+    networks:
+      - agentnet
+    depends_on:
+      - checkpoint

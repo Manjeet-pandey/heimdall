@@ -1,0 +1,8 @@
+# local secrets — never commit
+.env.secrets
+__pycache__/
+*.pyc
+*.db
+*.sqlite3
+demo/recorded/
+proof/out/
