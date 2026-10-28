@@ -6,3 +6,8 @@ __pycache__/
 *.sqlite3
 demo/recorded/
 proof/out/
+
+# planning docs stay local (not part of submission)
+hackathon-plan.html
+AGENTS.md
+CHECKPOINT.md
