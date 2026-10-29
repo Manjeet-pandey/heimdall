@@ -86,8 +86,10 @@ def _verdict(system: str, user: str, api_key: str) -> tuple[str, str] | None:
     """One Muse call. None on any failure (API down, timeout, malformed or off-schema answer)."""
     payload = {
         "model": MODEL,
-        "reasoning_effort": "low",
-        "max_completion_tokens": 300,
+        # Budget includes reasoning tokens: at 300, Muse spent them all thinking and returned no answer.
+        # minimal gave the same verdicts as low in testing, ~1.5s vs ~2.2s.
+        "reasoning_effort": "minimal",
+        "max_completion_tokens": 2000,
         "response_format": SCHEMA,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
