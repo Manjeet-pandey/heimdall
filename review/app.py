@@ -27,7 +27,8 @@ POLICY_SEED = ROOT / "checkpoint/policy.json"
 PROOF = ROOT / "proof/out"
 PAGE = Path(__file__).with_name("index.html")
 COLS = "id, ts, agent, method, host, path, bytes_out, verdict, reason, reviewer"
-ALLOWED_HOSTS = {"127.0.0.1:8000", "localhost:8000"}  # Host header check: DNS rebinding can't reach the API
+PORT = int(os.environ.get("REVIEW_PORT", "8000"))
+ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}  # Host header check: DNS rebinding can't reach the API
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "*"}
 # Run buttons: fixed commands only, never anything from the request. Need docker -> host only.
 RUNNER = shutil.which("docker") is not None and os.environ.get("REVIEW_RUNNER", "1") != "0"
@@ -69,10 +70,14 @@ def save_policy(p: dict) -> None:
 
 # --- live feed ---------------------------------------------------------------------------------------------
 
+# Proof-baseline traffic (supervisor off) is test data, never shown as live activity.
+LIVE = "reviewer != 'off'"
+
+
 def moves(after: int) -> list[dict]:
     if after:
-        return query(f"select {COLS} from moves where id > ? order by id limit 300", (after,))
-    return query(f"select {COLS} from moves order by id desc limit 200")[::-1]
+        return query(f"select {COLS} from moves where id > ? and {LIVE} order by id limit 300", (after,))
+    return query(f"select {COLS} from moves where {LIVE} order by id desc limit 300")[::-1]
 
 
 def summary() -> dict:
@@ -89,7 +94,10 @@ def summary() -> dict:
         n = sum(u["n"] for u in rows if u["host"] not in a["allow_hosts"])
         budget.append({"agent": agent, "dest": None, "used": n, "cap": a.get("unknown_day", 4096)})
     counts = {r["verdict"]: r["n"] for r in query(
-        "select verdict, count(*) n from moves where ts >= ? group by verdict", (t,))}
+        f"select verdict, count(*) n from moves where ts >= ? and {LIVE} group by verdict", (t,))}
+    # Per deciding layer and outcome, for the diagram's counters.
+    by_reviewer = query(f"select reviewer who, verdict, count(*) n from moves where ts >= ? and {LIVE} "
+                        "group by reviewer, verdict", (t,))
     caught = query("select reviewer who, count(*) n from moves where ts >= ? and verdict = 'block' "
                    "group by reviewer order by n desc", (t,))
     last_muse = query("select reason, ts from moves where reviewer in ('muse-reviewer', 'muse-history') "
@@ -99,13 +107,14 @@ def summary() -> dict:
         ms = re.search(r"\[muse (\d+)ms", last_muse[0]["reason"])
         # Only a real Muse answer carries the "[muse Nms" marker; anything else means Muse didn't answer.
         muse = {"state": "up" if ms else "down", "latency_ms": int(ms.group(1)) if ms else None}
-    last = query("select max(ts) ts from moves")
+    last = query(f"select max(ts) ts from moves where {LIVE}")
     strict = query("select agent, min(ts) since from moves where verdict = 'flag' and ts >= ? group by agent", (t,))
     return {"budget": budget, "stopped": counts.get("block", 0),
             "passed": sum(counts.get(v, 0) for v in ("allow", "allow-with-budget", "learn")),
             "caught": caught, "muse": muse, "strict": strict, "last_ts": last[0]["ts"] if last else None,
-            "waiting": len(escalations()["waiting"]),
-            "modes": {agent: a.get("mode", "locked") for agent, a in policy.items()}}
+            "waiting": len(escalations()["waiting"]), "by_reviewer": by_reviewer, "flags": counts.get("flag", 0),
+            "agents": {agent: {"mode": a.get("mode", "locked"), "allow_hosts": sorted(a["allow_hosts"])}
+                       for agent, a in policy.items()}}
 
 
 # --- escalations: Muse (or strict mode) asked for a human ---------------------------------------------------
@@ -291,5 +300,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     bind = os.environ.get("REVIEW_BIND", "127.0.0.1")
-    print(f"review page on http://127.0.0.1:8000 (run buttons {'on' if RUNNER else 'off: no docker here'})", flush=True)
-    ThreadingHTTPServer((bind, 8000), Handler).serve_forever()
+    print(f"review page on http://127.0.0.1:{PORT} (run buttons {'on' if RUNNER else 'off: no docker here'})", flush=True)
+    ThreadingHTTPServer((bind, PORT), Handler).serve_forever()

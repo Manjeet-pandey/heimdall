@@ -48,6 +48,11 @@ def check(name, got, want):
         fails.append(f"{name}: got {got!r}, want {want!r}")
 
 
+# Live view never shows proof-baseline (supervisor off) traffic.
+log(db, "coder", "POST", "ci-diagnostics.test", "/c", 100, "allow", "supervisor off (proof baseline)", "off")
+check("live-hides-baseline", [m["reviewer"] for m in app.moves(0) if m["reviewer"] == "off"], [])
+check("summary-agents", app.summary()["agents"]["coder"]["allow_hosts"], ["api.github.com", "api.openai.com"])
+
 # Write guards: another site in the browser, or DNS rebinding to 127.0.0.1, can't act.
 check("no-header", post("/api/decide", {"id": esc, "decision": "allow"}, header=False)[0], 403)
 check("rebinding-host", post("/api/decide", {"id": esc, "decision": "allow"}, host="evil.example:8000")[0], 403)
