@@ -1,0 +1,19 @@
+{
+  "agents": {
+    "coder": {
+      "allow_hosts": ["api.openai.com", "api.github.com"],
+      "llm_hosts": ["api.openai.com"],
+      "path_rules": [
+        ["POST", "api\\.openai\\.com", "/v1/chat/completions", 262144],
+        ["GET", "api\\.github\\.com", "/repos/me/.*", 0],
+        ["POST", "api\\.github\\.com", "/repos/me/[^/]+/issues/\\d+/comments", 8192]
+      ],
+      "budget_day": 50000000,
+      "unknown_day": 4096
+    }
+  },
+  "placeholders": {
+    "gw_ph_openai_x7f3": ["coder", "api.openai.com", "OPENAI_API_KEY"],
+    "gw_ph_github_k2p9": ["coder", "api.github.com", "GITHUB_TOKEN"]
+  }
+}

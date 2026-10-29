@@ -1,23 +1,40 @@
-# sandbox + checkpoint skeleton — Day 1 target
-# Agents: no DNS, no external route. Only checkpoint reaches the internet.
+# sandbox + checkpoint
+# Agents: no external route. Only checkpoint reaches the internet.
 networks:
   agentnet:
     internal: true
   egress:
+volumes:
+  mitm-conf:  # CA private key — checkpoint only
 services:
   checkpoint:
     image: mitmproxy/mitmproxy:11
-    command: mitmdump -s /app/checkpoint/addon.py --set body_size_limit=1048576
+    # lazy: no upstream connect/DNS before the request hook decides. proxyauth username = agent name.
+    # ponytail: single proxyauth user; switch to proxyauth=@htpasswd when the second agent image lands.
+    command: >
+      mitmdump -s /app/checkpoint/addon.py
+      --set body_size_limit=1m
+      --set connection_strategy=lazy
+      --set proxyauth=coder:coder-pass
+    working_dir: /app
     volumes:
       - ./checkpoint:/app/checkpoint:ro
+      - ./reviewer:/app/reviewer:ro
+      - ./data:/data
+      - mitm-conf:/home/mitmproxy/.mitmproxy
     environment:
-      - HTTPS_PROXY=http://checkpoint:8080
+      - PYTHONPATH=/app
+      - HEIMDALL_DB=/data/checkpoint.db
+      - HEIMDALL_CA_OUT=/data/ca/mitmproxy-ca-cert.pem
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/ca/mitmproxy-ca-cert.pem"]
+      interval: 2s
+      retries: 15
     networks:
       - agentnet
       - egress
     ports:
       - "127.0.0.1:8080:8080"  # proxy
-      - "127.0.0.1:8000:8000"  # review page (via review service in later days)
     env_file:
       - .env.secrets
   coder:
@@ -25,16 +42,20 @@ services:
     command: sleep infinity
     user: "10000:10000"
     read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     volumes:
       - ./agent-work/coder:/work:rw
       - ./notes:/notes:ro
+      - ./data/ca:/certs:ro  # public CA cert only, published by the checkpoint
     environment:
-      - HTTPS_PROXY=http://coder-user:coder-pass@checkpoint:8080
-      - HTTP_PROXY=http://coder-user:coder-pass@checkpoint:8080
+      - HTTPS_PROXY=http://coder:coder-pass@checkpoint:8080
+      - HTTP_PROXY=http://coder:coder-pass@checkpoint:8080
       - REQUESTS_CA_BUNDLE=/certs/mitmproxy-ca-cert.pem
       - SSL_CERT_FILE=/certs/mitmproxy-ca-cert.pem
       - NODE_EXTRA_CA_CERTS=/certs/mitmproxy-ca-cert.pem
     networks:
       - agentnet
     depends_on:
-      - checkpoint
+      checkpoint:
+        condition: service_healthy

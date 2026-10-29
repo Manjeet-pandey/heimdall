@@ -1,73 +1,148 @@
-"""mitmproxy entrypoint. Request bodies buffered, responses stream (SSE keeps working)."""
+"""mitmproxy entrypoint. Request bodies buffered, LLM responses stream (SSE keeps working).
+Every hook fails closed: an exception in a mitmproxy addon otherwise lets the flow through unchecked.
+Run with --set connection_strategy=lazy so nothing connects (or resolves) before request() decides."""
 
-from checkpoint.rules import (
-    check_destination,
-    check_keys,
-    check_provider_fetch,
-    check_endpoint,
-    count_egress,
-)
+import asyncio
+import os
+import shutil
+import socket
+from pathlib import Path
+
+from mitmproxy import ctx, http
+
+from checkpoint import rules as R
+from checkpoint.creds import swap_placeholders
 from checkpoint.db import connect, log
+from reviewer.muse import quote_redacted, review_unknown
 
-try:
-    from reviewer.muse import review_unknown
-except Exception:  # unit tests without reviewer deps
-
-    def review_unknown(agent, method, host, path, body):
-        return ("escalate", "reviewer unavailable")
+R.load_policy(os.environ.get("HEIMDALL_POLICY", Path(__file__).with_name("policy.json")))
+DB = connect(os.environ.get("HEIMDALL_DB", "checkpoint.db"))
 
 
-DB = connect()
+def _agent(flow) -> str | None:
+    # Set by mitmproxy's proxyauth addon: agent = proxy username.
+    auth = flow.metadata.get("proxyauth")
+    return auth[0] if auth else None
 
 
-def _block(flow, agent, host, path, nbytes, reason, who):
-    from mitmproxy.http import Response
+def _log(flow, agent, nbytes, verdict, reason, who):
+    # Query strings dropped and everything redacted: a foreign key in a blocked request must not land in the log.
+    r = flow.request
+    path = quote_redacted(r.path.split("?", 1)[0], 512)
+    log(DB, agent or "?", r.method, quote_redacted(r.host, 253), path, nbytes, verdict, quote_redacted(reason, 512), who)
 
-    flow.response = Response.make(403, reason.encode(), {"Content-Type": "text/plain"})
-    log(DB, agent, flow.request.method, host, path, nbytes, "block", reason, who)
 
-
-def request(flow):
-    agent = flow.metadata.get("agent", "unknown")
-    host = flow.request.host or ""
-    method = flow.request.method
-    path = flow.request.path or "/"
-    body = flow.request.raw_content or b""
-    nbytes = len(flow.request.pretty_url.encode()) + len(body)
-
-    reason = check_destination(agent, host)
-    if reason:
-        return _block(flow, agent, host, path, 0, reason, "hard-rule:dest")
-    headers = dict(flow.request.headers.items())
-    for fn, who in [
-        (
-            lambda: check_keys(agent, host, headers, flow.request.pretty_url, body),
-            "hard-rule:keys",
-        ),
-        (lambda: check_provider_fetch(agent, host, body), "hard-rule:provider-fetch"),
-        (
-            lambda: check_endpoint(agent, method, host, path.split("?")[0], len(body)),
-            "hard-rule:endpoint",
-        ),
-        (lambda: count_egress(agent, host, nbytes), "hard-rule:budget"),
-    ]:
-        reason = fn()
-        if reason:
-            return _block(flow, agent, host, path, nbytes, reason, who)
-    # Unknown move: reviewer can deny/escalate, never allow past a hard rule.
-    verdict, rreason = review_unknown(agent, method, host, path.split("?")[0], body)
-    if verdict in ("deny", "escalate"):
-        return _block(
-            flow, agent, host, path, nbytes, f"{verdict}: {rreason}", "muse-reviewer"
-        )
-    log(
-        DB,
-        agent,
-        method,
-        host,
-        path,
-        nbytes,
-        "allow-with-budget",
-        rreason,
-        "muse-reviewer",
+def _block(flow, agent, nbytes, reason, who):
+    flow.response = http.Response.make(
+        403, f"heimdall: {quote_redacted(reason, 512)}\n".encode(), {"Content-Type": "text/plain"}
     )
+    _log(flow, agent, nbytes, "block", reason, who)
+
+
+async def request(flow: http.HTTPFlow) -> None:
+    agent = _agent(flow)
+    try:
+        await _decide(flow, agent)
+    except Exception as e:
+        _block(flow, agent, 0, f"checkpoint error, fail-closed: {type(e).__name__}", "hard-rule:error")
+
+
+async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
+    req = flow.request
+    host = req.host.lower()
+    path = req.path.split("?", 1)[0]
+    body = req.raw_content or b""
+    headers = list(req.headers.items(multi=True))
+    header_bytes = sum(len(k) + len(v) + 4 for k, v in headers)
+    nbytes = len(req.url) + header_bytes + len(body)  # all egress: URL + headers + body
+
+    if agent not in R.ALLOWLIST:
+        return _block(flow, agent, nbytes, "unknown agent", "hard-rule:agent")
+    known_host = host in R.ALLOWLIST[agent]["allow_hosts"]
+    for who, check in [
+        ("hard-rule:size", lambda: R.check_sizes(req.url, header_bytes)),
+        ("hard-rule:dest", lambda: R.check_destination(host)),
+        ("hard-rule:sni", lambda: R.check_sni(host, req.host_header, flow.client_conn.sni, req.scheme)),
+        ("hard-rule:encoding", lambda: None if req.headers.get("content-encoding", "identity").lower() == "identity"
+         else "encoded request body refused (checks need plaintext)"),
+        ("hard-rule:path", lambda: R.check_path(req.path)),
+        ("hard-rule:upgrade", lambda: "upgrade to non-allowlisted host refused"
+         if req.headers.get("upgrade") and not known_host else None),
+        ("hard-rule:keys", lambda: R.check_keys(agent, host, headers, req.url, body)),
+        ("hard-rule:provider-fetch", lambda: R.check_provider_fetch(agent, host, body)),
+    ]:
+        reason = check()
+        if reason:
+            return _block(flow, agent, nbytes, reason, who)
+
+    cap = R.match_endpoint(agent, req.method, host, path)
+    if cap is not None:
+        if len(body) > cap:
+            return _block(flow, agent, nbytes, f"body {len(body)}B over cap {cap}B for {req.method} {host}{path}",
+                          "hard-rule:endpoint")
+        verdict, why, who = "allow", "endpoint rule", "hard-rule:endpoint"
+    else:
+        # Unknown move: only an exact allow-with-budget passes; anything else (deny, escalate, garbage) blocks.
+        # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
+        verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
+        who = "muse-reviewer"
+        if verdict != "allow-with-budget":
+            return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
+
+    reason = R.count_egress(agent, host, nbytes, known_host)
+    if reason:
+        return _block(flow, agent, nbytes, reason, "hard-rule:budget")
+    swap_placeholders(agent, host, req.headers)
+    _log(flow, agent, nbytes, verdict, why, who)
+
+
+async def server_connect(data) -> None:
+    """Resolve once, refuse non-global IPs, pin the IP we checked (no DNS-rebinding window). SNI stays the hostname."""
+    host, port = data.server.address[:2]
+    try:
+        if R.is_ip_literal(host):
+            data.server.error = "heimdall: IP literal refused"
+            return
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        ips = sorted({i[4][0] for i in infos})
+        bad = [ip for ip in ips if R.is_private_target(ip)]
+        if not ips or bad:
+            data.server.error = f"heimdall: {host} resolves to non-public {bad}"
+            return
+        data.server.address = (ips[0], port)
+    except Exception as e:
+        data.server.error = f"heimdall: resolve failed, fail-closed: {type(e).__name__}"
+
+
+def responseheaders(flow: http.HTTPFlow) -> None:
+    # ponytail: non-LLM responses are buffered but not yet scanned; PromptGuard 2 hooks in here (Fri).
+    if flow.request.host.lower() in R.LLM_HOSTS.get(_agent(flow), set()):
+        flow.response.stream = True
+
+
+def websocket_message(flow: http.HTTPFlow) -> None:
+    msg = flow.websocket.messages[-1]
+    if not msg.from_client:
+        return
+    agent = _agent(flow)
+    try:
+        if R.PLACEHOLDER_RE.search(msg.content.decode("utf-8", "ignore")):
+            reason = "placeholder in websocket frame (tripwire)"
+        else:
+            reason = R.count_egress(agent, flow.request.host.lower(), len(msg.content), True)
+    except Exception as e:
+        reason = f"checkpoint error, fail-closed: {type(e).__name__}"
+    if reason:
+        msg.drop()
+        flow.kill()
+        _log(flow, agent, len(msg.content), "block", reason, "hard-rule:websocket")
+
+
+def running() -> None:
+    # Publish only the public CA cert for agents; the CA private key stays in the checkpoint's confdir.
+    out = os.environ.get("HEIMDALL_CA_OUT")
+    if out:
+        # tlsconfig only creates the CA in its own running(), which can fire after ours (upstream FIXME); idempotent.
+        ctx.master.addons.get("tlsconfig").configure({"confdir"})
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        shutil.copy(Path(ctx.options.confdir).expanduser() / "mitmproxy-ca-cert.pem", out)

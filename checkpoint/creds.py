@@ -1,8 +1,11 @@
 """Real keys live in process env (from .env.secrets). Agents only ever see placeholders."""
 
 import os
+import re
 
-PLACEHOLDER_PREFIX = "gw_ph_"
+# placeholder -> (agent, host, env var holding the real key). Filled from policy.json.
+PLACEHOLDERS: dict[str, tuple[str, str, str]] = {}
+_PH_RE = re.compile(rb"gw_ph_[A-Za-z0-9_]+")
 
 
 def real_key(name: str) -> str:
@@ -12,9 +15,14 @@ def real_key(name: str) -> str:
     return v
 
 
-def swap_placeholder(host: str, body: bytes, mapping: dict[str, str]) -> bytes:
-    """Header-only swap in v1. Body JSON re-serialize only if a rule needs it."""
-    out = body
-    for placeholder, env_name in mapping.get(host, {}).items():
-        out = out.replace(placeholder.encode(), real_key(env_name).encode())
-    return out
+def swap_placeholders(agent: str, host: str, headers) -> None:
+    """Header-only swap, run after check_keys. A placeholder in URL/body never becomes a real key
+    (an LLM could echo it back). Only this agent's placeholders for this exact host are swapped."""
+
+    def sub(m: re.Match) -> bytes:
+        owner = PLACEHOLDERS.get(m.group().decode())
+        if owner is None or owner[:2] != (agent, host):
+            return m.group()
+        return real_key(owner[2]).encode()
+
+    headers.fields = tuple((k, _PH_RE.sub(sub, v)) for k, v in headers.fields)
