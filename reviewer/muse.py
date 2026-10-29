@@ -139,10 +139,11 @@ def review_history(
     agent: str, task: str, history: list[dict], method: str, host: str, path: str, body: bytes
 ) -> tuple[str, str]:
     """Slow-leak review of a write to an allowed endpoint, against the task and recent moves.
-    Returns escalate when Muse can't answer; the caller decides what that means (strict mode blocks)."""
+    Returns "unavailable" when Muse can't answer (distinct from Muse answering "escalate" = not sure);
+    the caller decides what each means."""
     api_key = os.environ.get("META_MODEL_API_KEY", "")
     if not api_key:
-        return "escalate", "history review unavailable (no Muse key)"
+        return "unavailable", "history review unavailable (no Muse key)"
     lines = "\n".join(
         f"{m['method']} {m['host']}{m['path']} {m['bytes_out']}B {m['verdict']}" for m in history
     )
@@ -151,4 +152,4 @@ def review_history(
         f"Agent: {agent}\n<task>\n{quote_redacted(task, 500)}\n</task>\n"
         f"<history oldest-first>\n{quote_redacted(lines, 3000)}\n</history>\n<write>\n{write}\n</write>"
     )
-    return _verdict(HISTORY_SYSTEM, user, api_key) or ("escalate", "history review unavailable (Muse error)")
+    return _verdict(HISTORY_SYSTEM, user, api_key) or ("unavailable", "history review unavailable (Muse error)")

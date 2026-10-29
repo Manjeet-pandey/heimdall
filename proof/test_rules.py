@@ -89,6 +89,7 @@ check("endpoint-escape", "unknown" if R.match_endpoint("coder", "POST", GH, "/re
 check("endpoint-host-not-allowed", "unknown" if R.match_endpoint("coder", "POST", "api.github.com.evil.com", "/repos/me/x") is None else None, True)
 # budget: unknown dests share one cap; refusal doesn't charge
 R.BUDGET_USED.clear()
+R.ALLOWLIST["coder"]["unknown_day"] = 4096  # cap mechanics; the shipped policy gives coder 0 for new sites
 check("budget-under", R.count_egress("coder", "a.com", 3000, False), False)
 check("budget-rotate-host", R.count_egress("coder", "b.com", 3000, False), True)
 check("budget-small-still-fits", R.count_egress("coder", "c.com", 1000, False), False)
@@ -96,8 +97,8 @@ check("budget-known", R.count_egress("coder", OA, 10_000, True), False)
 # learning: new hosts get the normal cap, but in ONE shared bucket (audit finding: was one 50 MB bucket per host)
 R.BUDGET_USED.clear()
 cap = R.ALLOWLIST["coder"]["budget_day"]
-check("learn-big-ok", R.count_egress("coder", "a.example", cap - 10, False, learning=True), False)
-check("learn-rotate-host-shares-cap", R.count_egress("coder", "b.example", 100, False, learning=True), True)
+check("learn-big-ok", R.count_egress("coder", "a.example", cap - 10, False, trusted=True), False)
+check("learn-rotate-host-shares-cap", R.count_egress("coder", "b.example", 100, False, trusted=True), True)
 # sizes
 check("url-cap", R.check_sizes("x" * 9000, 0), True)
 check("header-cap", R.check_sizes("x", 20000), True)

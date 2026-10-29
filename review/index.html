@@ -517,6 +517,8 @@ function explain(m) {
     if (who === "muse-history") return { kind: "pass", layer: "muse", title: "Allowed", why: "One of its normal moves, and Muse checked the content fits its job." };
     return { kind: "pass", layer: "rules", title: "Allowed", why: "One of its normal moves." };
   }
+  if (/new site needs you/.test(r)) return { kind: "wait", layer: "muse", title: "Stopped, waiting for you",
+    why: `Muse thought it looked harmless, but ${m.agent} may only send to new sites with your OK.` };
   if (/waiting for you|waiting for your decision|need you/.test(r)) {
     return { kind: "wait", layer: who === "strict-mode" ? "pg" : who === "human" ? "you" : "muse", title: "Stopped, waiting for you",
       why: who === "strict-mode" ? "It recently read a page with hidden instructions, so anything new needs your OK."
@@ -817,7 +819,9 @@ async function loadNeeds() {
     const main = el("div");
     main.append(el("p", "act", `${r.agent} wants to ${describe(r.method, r.host, r.path, r.agent, true)}`),
       el("span", "meta", `Asked at ${fmtTime(r.ts)}. Request: ${r.method} ${r.host}${r.path}`),
-      el("p", "why", `Why it's here: ${/^strict mode/.test(r.reason) ? "the agent recently read a page with hidden instructions." : `Muse wasn't sure. "${stripMeta(r.reason)}"`}`));
+      el("p", "why", `Why it's here: ${/^strict mode/.test(r.reason) ? "the agent recently read a page with hidden instructions."
+        : /^new site needs you/.test(r.reason) ? `Muse thought it looked harmless, but ${r.agent} may only send to new sites with your OK. Muse said: "${stripMeta(r.reason).replace(/^new site needs you: Muse thinks it's harmless \((.*)\)$/, "$1")}"`
+        : `Muse wasn't sure. "${stripMeta(r.reason).replace(/^escalate: /, "")}"`}`));
     const act = el("div", "actions");
     for (const [label, d, cls] of [["Allow once", "allow", "allow"], ["Deny", "deny", "deny"]]) {
       const b = el("button", `btn ${cls}`, label);

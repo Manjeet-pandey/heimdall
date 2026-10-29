@@ -116,49 +116,59 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
             return _block(flow, agent, nbytes, reason, who)
 
     cap = R.match_endpoint(agent, req.method, host, path)
-    if cap is not None:
-        if len(body) > cap:
-            return _block(flow, agent, nbytes, f"body {len(body)}B over cap {cap}B for {req.method} {host}{path}",
-                          "hard-rule:endpoint")
+    if cap is not None and len(body) > cap:
+        return _block(flow, agent, nbytes, f"body {len(body)}B over cap {cap}B for {req.method} {host}{path}",
+                      "hard-rule:endpoint")
+    # Writes to allowed endpoints get Muse's history review; slow leaks ride them.
+    reviewed_write = cap is not None and req.method in WRITE_METHODS and host not in R.LLM_HOSTS.get(agent, set())
+    # The exact request (method, URL incl. query, body) keys the human queue.
+    req_sha = hashlib.sha256(f"{req.method} {host}{req.path}\n".encode() + body).hexdigest()
+    shown = quote_redacted(path, 512)
+    esc = open_escalation(DB, agent, req_sha) if cap is None or reviewed_write else None
+    learning = R.ALLOWLIST[agent]["mode"] == "learn" and agent not in STRICT
+    strict = agent in STRICT
+
+    def to_human(reason: str, who: str):
+        e = escalate(DB, agent, req.method, host, shown, req_sha, quote_redacted(reason, 512))
+        return _block(flow, agent, nbytes, f"{reason} (escalation #{e}, waiting for you)", who)
+
+    if esc is not None:
+        decision = human_decision(DECISIONS, esc)
+        if decision != "allow":
+            why = "denied by you" if decision == "deny" else "waiting for your decision"
+            return _block(flow, agent, nbytes, f"{why} (escalation #{esc})", "human")
+        verdict, why, who = "allow", f"approved by you (escalation #{esc})", "human"
+    elif cap is not None:
         verdict, why, who = "allow", "endpoint rule", "hard-rule:endpoint"
-        if req.method in WRITE_METHODS and host not in R.LLM_HOSTS.get(agent, set()):
-            # Slow leaks ride allowed writes. Muse may deny; when it can't answer, only strict mode blocks.
+        if reviewed_write:
             hv, hwhy = await asyncio.to_thread(
                 review_history, agent, R.ALLOWLIST[agent]["task"], recent(DB, agent), req.method, host, path, body)
-            strict = agent in STRICT
-            if hv == "deny" or (strict and hv != "allow-with-budget"):
-                return _block(flow, agent, nbytes, f"{hv}{' (strict mode)' if strict else ''}: {hwhy}", "muse-history")
+            if hv == "deny":
+                return _block(flow, agent, nbytes, f"deny: {hwhy}", "muse-history")
+            if hv == "escalate":  # Muse answered "not sure": you decide, not the default
+                return to_human(f"escalate: {hwhy}", "muse-history")
+            if hv == "unavailable" and strict:  # Muse unreachable: allowed writes go on, unless under watch
+                return _block(flow, agent, nbytes, f"unavailable (strict mode): {hwhy}", "muse-history")
             verdict, why, who = "allow", f"endpoint rule; history {hv}: {hwhy}", "muse-history"
+    elif learning:
+        verdict, why, who = "learn", "learning run: recorded for your approval", "learn-mode"
+    elif strict:
+        return to_human("strict mode: agent read flagged content, unknown moves need you", "strict-mode")
     else:
-        # Unknown move. The exact request (method, URL incl. query, body) keys the human queue.
-        req_sha = hashlib.sha256(f"{req.method} {host}{req.path}\n".encode() + body).hexdigest()
-        shown = quote_redacted(path, 512)
-        esc = open_escalation(DB, agent, req_sha)
-        learning = R.ALLOWLIST[agent]["mode"] == "learn" and agent not in STRICT
-        if esc is not None:
-            decision = human_decision(DECISIONS, esc)
-            if decision != "allow":
-                why = "denied by you" if decision == "deny" else "waiting for your decision"
-                return _block(flow, agent, nbytes, f"{why} (escalation #{esc})", "human")
-            verdict, why, who = "allow", f"approved by you (escalation #{esc})", "human"
-        elif learning:
-            verdict, why, who = "learn", "learning run: recorded for your approval", "learn-mode"
-        elif agent in STRICT:
-            esc = escalate(DB, agent, req.method, host, shown, req_sha, "strict mode: agent read flagged content")
-            return _block(flow, agent, nbytes, f"strict mode: unknown moves need you (escalation #{esc})",
-                          "strict-mode")
-        else:
-            # Only an exact allow-with-budget passes; escalate goes to the human queue; anything else blocks.
-            # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
-            verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
-            who = "muse-reviewer"
-            if verdict == "escalate":
-                esc = escalate(DB, agent, req.method, host, shown, req_sha, quote_redacted(why, 512))
-                return _block(flow, agent, nbytes, f"escalate: {why} (escalation #{esc}, waiting for you)", who)
-            if verdict != "allow-with-budget":
-                return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
+        # Only an exact allow-with-budget passes; escalate goes to the human queue; anything else blocks.
+        # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
+        verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
+        who = "muse-reviewer"
+        if verdict == "escalate":
+            return to_human(f"escalate: {why}", who)
+        if verdict != "allow-with-budget":
+            return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
+        if R.ALLOWLIST[agent]["unknown_day"] == 0:
+            # This agent has no allowance for new sites: a Muse "looks harmless" is a suggestion to you, not a pass.
+            return to_human(f"new site needs you: Muse thinks it's harmless ({why})", who)
 
-    reason = R.count_egress(agent, host, nbytes, known_host, learning=cap is None and learning)
+    # Learning runs and your own approvals get the normal daily cap for new sites (still one shared bucket).
+    reason = R.count_egress(agent, host, nbytes, known_host, trusted=cap is None and (learning or who == "human"))
     if reason:
         return _block(flow, agent, nbytes, reason, "hard-rule:budget")
     if who == "human":

@@ -82,9 +82,9 @@ um = sent[-1]["messages"][1]["content"]
 if "<task>\nFix CI" not in um or "/repos/me/proj/issues/1 217B allow" not in um or "ghp_" in um:
     fails.append(f"history prompt wrong or leaks: {um!r}")
 fake(TimeoutError())
-expect("history-down", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "escalate", "unavailable")
+expect("history-down", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "unavailable", "unavailable")
 os.environ.pop("META_MODEL_API_KEY")
-expect("history-no-key", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "escalate", "no Muse key")
+expect("history-no-key", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "unavailable", "no Muse key")
 
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
 sys.exit(1 if fails else 0)

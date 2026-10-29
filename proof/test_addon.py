@@ -66,9 +66,13 @@ from reviewer import muse
 os.environ["META_MODEL_API_KEY"] = "test-not-real"
 muse._post = lambda payload, key: {"choices": [{"message": {"content":
     '{"verdict": "allow-with-budget", "reason": "benign"}'}}], "usage": {}}
+R.ALLOWLIST["coder"]["unknown_day"] = 4096  # an agent WITH a new-site allowance: Muse allows, cap still bites
 expect("muse-allow-unknown", flow("docs.python.org", "/upload", body=b"A" * 1000), False)
 expect("muse-allow-still-capped", flow("docs.python.org", "/upload", body=b"A" * 4000), True, "budget")
 expect("muse-allow-no-tripwire-override", flow("docs.python.org", "/upload", body=PH_OA.encode()), True, "tripwire")
+R.ALLOWLIST["coder"]["unknown_day"] = 0  # the shipped setting: Muse "harmless" on a new site goes to you instead
+expect("zero-cap-muse-allow-asks-you", flow("docs.python.org", "/q?d=4f3a9c0b1d2e", method="GET", body=b""), True,
+       "new site needs you")
 muse._post = lambda payload, key: (_ for _ in ()).throw(TimeoutError())
 expect("muse-down-fails-closed", flow("docs.python.org", "/other", body=b"x"), True, "fail-closed")
 os.environ.pop("META_MODEL_API_KEY")
@@ -90,6 +94,10 @@ expect("strict-blocks-unknown-even-if-muse-allows", flow("docs.python.org", "/x"
 expect("strict-allows-reviewed-write", flow(*comment, body=b'{"body":"progress"}'), False)
 expect("strict-keeps-reads", flow("api.github.com", "/repos/me/proj/issues/1", method="GET", body=b""), False)
 addon.STRICT.clear()
+# Muse answers "not sure" on an allowed write -> it waits for you instead of going out.
+muse._post = lambda payload, key: {"choices": [{"message": {"content":
+    '{"verdict": "escalate", "reason": "opaque hex string"}'}}], "usage": {}}
+expect("history-unsure-asks-you", flow(*comment, body=b'{"body":"ci log 4f3a9c0b1d2e"}'), True, "waiting for you")
 os.environ.pop("META_MODEL_API_KEY")
 
 # PromptGuard on responses: flag or guard down -> strict mode; LLM streams and our own 403s are skipped.
@@ -148,6 +156,19 @@ esc2 = addon.DB.execute("select max(id) from escalations").fetchone()[0]
 answer(esc2, "deny")
 expect("denied-sticks", flow(*probe, method="GET", body=b""), True, "denied by you")
 expect("approval-never-beats-hard-rule", flow("docs.example.org", "/q", body=PH_OA.encode()), True, "tripwire")
+# Your approval works even with a 0 new-site allowance (it gets the normal cap), and on an allowed write too.
+muse._post = lambda payload, key: {"choices": [{"message": {"content":
+    '{"verdict": "allow-with-budget", "reason": "looks harmless"}'}}], "usage": {}}
+newsite = ("pypi.org", "/simple/x/")
+expect("zero-cap-waits", flow(*newsite, method="GET", body=b""), True, "new site needs you")
+answer(addon.DB.execute("select max(id) from escalations").fetchone()[0], "allow")
+expect("you-allow-new-site-despite-zero-cap", flow(*newsite, method="GET", body=b""), False)
+muse._post = lambda payload, key: {"choices": [{"message": {"content":
+    '{"verdict": "escalate", "reason": "not sure"}'}}], "usage": {}}
+w = ("api.github.com", "/repos/me/proj/issues/1/comments")
+expect("write-waits", flow(*w, body=b'{"body":"hmm"}'), True, "waiting for you")
+answer(addon.DB.execute("select max(id) from escalations").fetchone()[0], "allow")
+expect("you-allow-write", flow(*w, body=b'{"body":"hmm"}'), False)
 
 # Learn mode: unknown moves pass and are recorded; hard rules still apply. Policy reloads from disk.
 pol = _json.load(open("checkpoint/policy.json"))

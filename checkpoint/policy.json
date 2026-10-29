@@ -10,7 +10,7 @@
         ["POST", "api\\.github\\.com", "/repos/me/[^/]+/issues/\\d+/comments", 8192]
       ],
       "budget_day": 50000000,
-      "unknown_day": 4096
+      "unknown_day": 0
     }
   },
   "placeholders": {
