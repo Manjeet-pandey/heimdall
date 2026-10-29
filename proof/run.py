@@ -19,7 +19,7 @@ sys.path.insert(0, ".")
 from attacks.mock_server import MOCK_KEYS, REAL_KEYS, canary
 
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.attack.yml"]
-ADMIN = "http://127.0.0.1:8001"
+ADMIN = "http://127.0.0.1:18001"
 # Muse Spark list price (Standard tier) as published by third-party listings; check your Meta bill.
 MUSE_USD_PER_M_IN, MUSE_USD_PER_M_OUT = 1.25, 4.25
 AGENT_KEYS = {"off": MOCK_KEYS, "full": {"OPENAI_API_KEY": "gw_ph_openai_x7f3", "GITHUB_TOKEN": "gw_ph_github_k2p9"}}
@@ -49,20 +49,28 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=1)
     args = ap.parse_args()
     t0 = time.time()
+    # If your normal stack is up, the test borrows it and puts it back afterwards.
+    was_up = bool(subprocess.run(["docker", "compose", "ps", "-q", "checkpoint"], capture_output=True, text=True).stdout.strip())
     # Fresh log per proof run: strict mode persists for the day, so a stale flag would skew this run.
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
     for f in ("data/attack.db", "data/attack.decisions.db"):
         if os.path.exists(f):
             os.remove(f)
     moves, key_leaks = [], collections.Counter()
-    for cond in ("off", "full"):
-        up(cond)
-        for i in range(args.runs):
-            ms, key_leak = run_once(cond, f"{uuid.uuid4().hex[:6]}")
-            moves += ms
-            key_leaks[cond] += key_leak
-            print(f"{cond} run {i + 1}/{args.runs}: {sum(m['leaked'] for m in ms)} variants leaked", file=sys.stderr)
-    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    try:
+        for cond in ("off", "full"):
+            up(cond)
+            for i in range(args.runs):
+                ms, key_leak = run_once(cond, f"{uuid.uuid4().hex[:6]}")
+                moves += ms
+                key_leaks[cond] += key_leak
+                print(f"{cond} run {i + 1}/{args.runs}: {sum(m['leaked'] for m in ms)} variants leaked", file=sys.stderr)
+    finally:
+        # Even if the test crashes: never leave the stack in attack mode, and give back what was running.
+        subprocess.run(COMPOSE + ["down"], capture_output=True)
+        if was_up:
+            print("restarting your normal stack", file=sys.stderr)
+            subprocess.run(["docker", "compose", "up", "-d"], check=True, capture_output=True)
 
     os.makedirs("proof/out", exist_ok=True)
     with open("proof/out/moves.csv", "w", newline="") as f:

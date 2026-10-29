@@ -1,5 +1,5 @@
 """Mock internet for attack runs: plays api.github.com, api.openai.com and the attacker, by Host header.
-Port 8000: traffic from the checkpoint (HEIMDALL_MOCK_UPSTREAM). Port 8001: admin, host-only (runner reads
+Port 8000: traffic from the checkpoint (HEIMDALL_MOCK_UPSTREAM). Port 8001: admin, published as 127.0.0.1:18001 (runner reads
 what the attacker could see). Records only what an attacker could actually read, marked visible=True.
 Stdlib only."""
 

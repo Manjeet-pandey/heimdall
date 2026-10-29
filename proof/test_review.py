@@ -86,6 +86,15 @@ check("rule-added", ["GET", r"pypi\.org", r"/simple/[^/]+/", 0] in pol["path_rul
 check("host-added", "pypi.org" in pol["allow_hosts"], True)
 check("runner-off-in-test", post("/api/run", {"job": "proof"})[0], 400)
 
+# Test source: reads the attack test's log, decisions go to its own file.
+tdb = connect(app.TEST_DB)
+tesc = escalate(tdb, "coder", "POST", "ci-diagnostics.test", "/c", "sha2", "unclear")
+log(tdb, "coder", "POST", "ci-diagnostics.test", "/c", 200, "block", "escalate: unclear", "muse-reviewer")
+check("test-src-moves", [m["host"] for m in app.moves(0, app.source("test"))], ["ci-diagnostics.test"])
+check("test-src-summary", app.summary(app.source("test"))["stopped"], 1)
+check("test-src-decide", post("/api/decide", {"id": tesc, "decision": "allow", "src": "test"})[0], 200)
+check("test-decision-separate", app.decisions(app.TEST_DB).get(tesc, {}).get("decision"), "allow")
+
 srv.shutdown()
 shutil.rmtree(tmp)
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")

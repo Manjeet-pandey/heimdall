@@ -22,6 +22,8 @@ from checkpoint.rules import check_destination  # noqa: E402
 
 DB = os.environ.get("HEIMDALL_DB", str(ROOT / "data/checkpoint.db"))
 DECISIONS = os.path.splitext(DB)[0] + ".decisions.db"  # same naming as the checkpoint: escalation ids are per DB
+# The attack test's log (proof/run.py, attack mode) sits next to the live one; the page can show either.
+TEST_DB = os.path.join(os.path.dirname(DB), "attack.db")
 POLICY = os.environ.get("HEIMDALL_POLICY", str(ROOT / "data/policy.json"))
 POLICY_SEED = ROOT / "checkpoint/policy.json"
 PROOF = ROOT / "proof/out"
@@ -74,16 +76,27 @@ def save_policy(p: dict) -> None:
 LIVE = "reviewer != 'off'"
 
 
-def moves(after: int) -> list[dict]:
+def source(src: str | None) -> str:
+    return TEST_DB if src == "test" else DB
+
+
+def decisions_file(db: str) -> str:
+    return os.path.splitext(db)[0] + ".decisions.db"
+
+
+def moves(after: int, db: str = DB) -> list[dict]:
     if after:
-        return query(f"select {COLS} from moves where id > ? and {LIVE} order by id limit 300", (after,))
-    return query(f"select {COLS} from moves where {LIVE} order by id desc limit 300")[::-1]
+        return query(f"select {COLS} from moves where id > ? and {LIVE} order by id limit 300", (after,), db)
+    return query(f"select {COLS} from moves where {LIVE} order by id desc limit 300", path=db)[::-1]
 
 
-def summary() -> dict:
-    t = today()
-    policy = load_policy()["agents"]
-    used = query("select agent, host, sum(bytes_out) n from moves where ts >= ? and verdict != 'block' "
+def summary(db: str = DB) -> dict:
+    # Live: today only. Test: the whole last run (proof/run.py wipes it first), whenever it happened.
+    t = today() if db == DB else 0
+    # The test always runs on the repo's seed policy, so show that one with it.
+    policy = load_policy()["agents"] if db == DB else json.loads(POLICY_SEED.read_text())["agents"]
+    q = lambda sql, args=(): query(sql, args, db)  # noqa: E731
+    used = q("select agent, host, sum(bytes_out) n from moves where ts >= ? and verdict != 'block' "
                  "and reviewer != 'off' group by agent, host", (t,))
     budget = []
     for agent, a in policy.items():
@@ -93,51 +106,52 @@ def summary() -> dict:
             budget.append({"agent": agent, "dest": host, "used": n, "cap": a["budget_day"]})
         n = sum(u["n"] for u in rows if u["host"] not in a["allow_hosts"])
         budget.append({"agent": agent, "dest": None, "used": n, "cap": a.get("unknown_day", 4096)})
-    counts = {r["verdict"]: r["n"] for r in query(
+    counts = {r["verdict"]: r["n"] for r in q(
         f"select verdict, count(*) n from moves where ts >= ? and {LIVE} group by verdict", (t,))}
     # Per deciding layer and outcome, for the diagram's counters.
-    by_reviewer = query(f"select reviewer who, verdict, count(*) n from moves where ts >= ? and {LIVE} "
+    by_reviewer = q(f"select reviewer who, verdict, count(*) n from moves where ts >= ? and {LIVE} "
                         "group by reviewer, verdict", (t,))
-    caught = query("select reviewer who, count(*) n from moves where ts >= ? and verdict = 'block' "
+    caught = q("select reviewer who, count(*) n from moves where ts >= ? and verdict = 'block' "
                    "group by reviewer order by n desc", (t,))
-    last_muse = query("select reason, ts from moves where reviewer in ('muse-reviewer', 'muse-history') "
+    last_muse = q("select reason, ts from moves where reviewer in ('muse-reviewer', 'muse-history') "
                       "order by id desc limit 1")
     muse = {"state": "idle"}
     if last_muse:
         ms = re.search(r"\[muse (\d+)ms", last_muse[0]["reason"])
         # Only a real Muse answer carries the "[muse Nms" marker; anything else means Muse didn't answer.
         muse = {"state": "up" if ms else "down", "latency_ms": int(ms.group(1)) if ms else None}
-    last = query(f"select max(ts) ts from moves where {LIVE}")
-    strict = query("select agent, min(ts) since from moves where verdict = 'flag' and ts >= ? group by agent", (t,))
+    last = q(f"select max(ts) ts from moves where {LIVE}")
+    strict = q("select agent, min(ts) since from moves where verdict = 'flag' and ts >= ? group by agent", (t,))
     return {"budget": budget, "stopped": counts.get("block", 0),
             "passed": sum(counts.get(v, 0) for v in ("allow", "allow-with-budget", "learn")),
             "caught": caught, "muse": muse, "strict": strict, "last_ts": last[0]["ts"] if last else None,
-            "waiting": len(escalations()["waiting"]), "by_reviewer": by_reviewer, "flags": counts.get("flag", 0),
+            "waiting": len(escalations(db)["waiting"]), "test_exists": os.path.exists(TEST_DB), "by_reviewer": by_reviewer, "flags": counts.get("flag", 0),
             "agents": {agent: {"mode": a.get("mode", "locked"), "allow_hosts": sorted(a["allow_hosts"])}
                        for agent, a in policy.items()}}
 
 
 # --- escalations: Muse (or strict mode) asked for a human ---------------------------------------------------
 
-def decisions() -> dict[int, dict]:
-    return {r["esc_id"]: r for r in query("select esc_id, decision, ts from decisions", path=DECISIONS)}
+def decisions(db: str = DB) -> dict[int, dict]:
+    return {r["esc_id"]: r for r in query("select esc_id, decision, ts from decisions", path=decisions_file(db))}
 
 
-def escalations() -> dict:
-    d = decisions()
-    rows = query("select id, ts, agent, method, host, path, reason, used from escalations order by id desc limit 200")
+def escalations(db: str = DB) -> dict:
+    d = decisions(db)
+    rows = query("select id, ts, agent, method, host, path, reason, used from escalations order by id desc limit 200",
+                 path=db)
     waiting = [r for r in rows if r["id"] not in d and not r["used"]]
     done = [{**r, "decision": d[r["id"]]["decision"], "decided": d[r["id"]]["ts"]} for r in rows if r["id"] in d][:30]
     return {"waiting": waiting, "done": done}
 
 
 def decide(body: dict) -> dict:
-    esc_id, decision = int(body["id"]), body["decision"]
+    esc_id, decision, db = int(body["id"]), body["decision"], source(body.get("src"))
     if decision not in ("allow", "deny"):
         raise ValueError("decision must be allow or deny")
-    if not query("select id from escalations where id = ?", (esc_id,)):
+    if not query("select id from escalations where id = ?", (esc_id,), db):
         raise ValueError(f"no escalation #{esc_id}")
-    c = sqlite3.connect(DECISIONS)
+    c = sqlite3.connect(decisions_file(db))
     try:
         c.execute("CREATE TABLE IF NOT EXISTS decisions(esc_id INTEGER PRIMARY KEY, decision TEXT, ts REAL)")
         # First answer wins: a decision the checkpoint may already have acted on is never rewritten.
@@ -249,8 +263,8 @@ def run(body: dict) -> dict:
     return {"ok": True}
 
 
-GETS = {"/api/summary": summary, "/api/escalations": escalations, "/api/learn": learned, "/api/proof": proof,
-        "/api/run": run_status}
+GETS = {"/api/summary": summary, "/api/escalations": escalations, "/api/learn": lambda db: learned(),
+        "/api/proof": lambda db: proof(), "/api/run": lambda db: run_status()}
 POSTS = {"/api/decide": decide, "/api/learn/start": start_learning, "/api/lock": lock, "/api/run": run}
 
 
@@ -259,10 +273,12 @@ class Handler(BaseHTTPRequestHandler):
         u = urlsplit(self.path)
         if u.path == "/":
             return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+        qs = parse_qs(u.query)
+        db = source(qs.get("src", ["live"])[0])
         if u.path == "/api/moves":
-            return self._json(200, moves(int(parse_qs(u.query).get("after", ["0"])[0] or 0)))
+            return self._json(200, moves(int(qs.get("after", ["0"])[0] or 0), db))
         if u.path in GETS:
-            return self._json(200, GETS[u.path]())
+            return self._json(200, GETS[u.path](db))
         return self._send(404, b"not found", "text/plain")
 
     def do_POST(self):

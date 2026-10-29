@@ -22,7 +22,7 @@ services:
     networks:
       - egress  # reachable by the checkpoint only, never by agents
     ports:
-      - "127.0.0.1:8001:8001"  # admin: what the attacker saw (runner only)
+      - "127.0.0.1:18001:8001"  # admin: what the attacker saw (runner only); odd port so nothing you run collides
   coder:
     volumes:
       - ./attacks:/attacks:ro

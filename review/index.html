@@ -88,6 +88,30 @@ h3 { font-size: 0.95rem; font-weight: 600; margin: 1.25rem 0 0.5rem; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .linkish { border: 0; background: none; padding: 0; color: var(--muse); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
+/* ---- source switch, running banner, start-here guide */
+.source { display: flex; align-items: center; gap: 0.5rem; width: 100%; margin-top: 0.6rem; font-size: 0.9rem; color: var(--muted); }
+.source .seg { display: flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.source button { border: 0; background: none; padding: 0.25rem 0.8rem; cursor: pointer; color: var(--muted); }
+.source button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.banner { margin: 1rem clamp(1rem, 3vw, 2.5rem) 0; padding: 0.75rem 1rem; border-radius: 8px; background: var(--panel); border: 1px solid var(--rule); border-left: 6px solid var(--muse); display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+.banner p { margin: 0; max-width: 80ch; }
+.banner .spin { width: 0.9rem; height: 0.9rem; border-radius: 50%; border: 2px solid var(--rule); border-top-color: var(--muse); animation: spin 0.9s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .banner .spin { animation: none; } }
+.guide { margin-top: 1.5rem; padding: 1.1rem 1.25rem 0.5rem; border-radius: 10px; background: var(--panel); border: 1px solid var(--rule); max-width: 72rem; position: relative; }
+.guide h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+.guide > p { margin: 0 0 0.5rem; color: var(--muted); max-width: 75ch; }
+.guide ol { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem 1.5rem; }
+.guide li { counter-increment: step; padding: 0.75rem 0 0.9rem; border-top: 1px solid var(--rule); }
+.guide li::before { content: counter(step); display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--ink); color: var(--paper); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
+.guide li b { display: block; margin-bottom: 0.2rem; }
+.guide li p { margin: 0 0 0.4rem; font-size: 0.9rem; }
+.guide li .expect { color: var(--muted); }
+.guide .note { font-size: 0.85rem; color: var(--muted); margin-top: 0.4rem; }
+.guide .x { position: absolute; top: 0.6rem; right: 0.6rem; border: 0; background: none; cursor: pointer; font-size: 1.2rem; color: var(--muted); }
+#guide-show { margin-top: 1.25rem; }
+@media (max-width: 900px) { .guide ol { grid-template-columns: minmax(0, 1fr); } }
+
 /* ---- the story line */
 .story { font-size: clamp(1.15rem, 1.6vw, 1.45rem); line-height: 1.35; font-weight: 500; max-width: 46ch; margin: 1.5rem 0 1.25rem; }
 .story b.s { color: var(--stop); }
@@ -271,6 +295,13 @@ pre.log:empty { display: none; }
     <span id="muse"><span class="dot"></span>Muse hasn't reviewed anything yet</span>
     <span id="watch" hidden></span>
   </div>
+  <div class="source" role="group" aria-label="Show requests from">
+    <span>Showing requests from</span>
+    <div class="seg">
+      <button type="button" data-src="live" aria-pressed="true">Your agents</button>
+      <button type="button" data-src="test" aria-pressed="false">The attack test</button>
+    </div>
+  </div>
 </header>
 
 <nav role="tablist" aria-label="Sections">
@@ -280,8 +311,34 @@ pre.log:empty { display: none; }
   <button role="tab" id="tab-proof" aria-controls="proof" aria-selected="false" data-view="proof">Test results</button>
 </nav>
 
+<div class="banner" id="banner" hidden aria-live="polite"></div>
+
 <main>
   <div class="view" id="live" role="tabpanel" aria-labelledby="tab-live">
+    <section class="guide" id="guide" aria-labelledby="guide-h">
+      <button type="button" class="x" id="guide-close" aria-label="Hide this guide">×</button>
+      <h2 id="guide-h">Start here: watch Heimdall stop an attack</h2>
+      <p>Your own agents aren't doing anything right now, so there's nothing to see live. The attack test plays a
+        compromised agent against Heimdall, safely, so you can see what it does.</p>
+      <ol>
+        <li><b>Run the attack test</b>
+          <p>A fake coding agent reads a GitHub issue with hidden instructions, then tries 18 ways to steal its keys
+            and secrets. About two minutes; fake keys and a fake internet only. If your agents are running, they pause for those two minutes and then start again.</p>
+          <p class="expect">You'll see: dots running through the diagram, red ones stopping at the checkpoint, and one
+            red card summing up the attack.</p>
+          <button type="button" class="btn primary" id="g-run">Run the attack test</button>
+          <p class="note" id="g-run-note" hidden></p></li>
+        <li><b>Make the calls Muse couldn't</b>
+          <p>Muse, Meta's AI reviewer, wasn't sure about a few of the requests. Those wait for you.</p>
+          <p class="expect">You'll see: each request in plain words, with Allow once and Deny buttons.</p>
+          <button type="button" class="btn" id="g-needs">Open Needs you</button></li>
+        <li><b>See the score</b>
+          <p>The same attack ran twice, without and with Heimdall.</p>
+          <p class="expect">You'll see: how many attacks got data out each way, and what stopped each trick.</p>
+          <button type="button" class="btn" id="g-score">Open Test results</button></li>
+      </ol>
+    </section>
+    <button type="button" class="btn" id="guide-show" hidden>Show the start-here guide</button>
     <p class="story" id="story">Nothing has gone through the checkpoint yet today.</p>
 
     <section class="flow" id="flow" aria-label="How Heimdall works, with today's counts">
@@ -339,6 +396,8 @@ pre.log:empty { display: none; }
 
   <div class="view" id="needs" role="tabpanel" aria-labelledby="tab-needs" hidden>
     <h2>Requests waiting for your decision</h2>
+    <p class="lede" id="needs-test-note" hidden><b>These come from the attack test.</b> The test is over, so deciding
+      here is practice. With your own agents, the agent's next try follows your choice.</p>
     <p class="lede">Muse wasn't sure about these, so the agent was stopped and told to wait. <b>Allow once</b> lets
       that exact request through the next time the agent tries it, still under every rule and data limit.
       <b>Deny</b> keeps it blocked.</p>
@@ -380,6 +439,11 @@ const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: fal
 const stripMeta = (r) => r.replace(/\s*\[muse [^\]]*\]/, "");
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 let AGENTS = {};
+let src = "live";  // which log the page shows: your agents, or the last attack test
+const qs = () => `src=${src}`;
+let RUNNER = false, TEST_EXISTS = false;
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Heimdall": "1" }, body: JSON.stringify(body) });
@@ -480,6 +544,42 @@ function show(v) {
   if (v === "proof") { loadProof(); pollRun(); }
 }
 document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
+const show_ = (v) => show(v);
+
+function setSrc(v) {
+  if (v === src) return;
+  src = v;
+  lastId = 0; all = []; booted = false; expanded.clear();
+  document.querySelectorAll(".source button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.src === src));
+  store.set("heimdall-src", src);
+  pollSummary().then(pollMoves);
+  if (view === "needs") loadNeeds();
+}
+document.querySelectorAll(".source button").forEach((b) => b.addEventListener("click", () => setSrc(b.dataset.src)));
+
+// ---- start-here guide
+function guide(open) {
+  $("guide").hidden = !open;
+  $("guide-show").hidden = open;
+  store.set("heimdall-guide", open ? "open" : "closed");
+}
+$("guide-close").onclick = () => guide(false);
+$("guide-show").onclick = () => guide(true);
+$("g-needs").onclick = () => { if (TEST_EXISTS && src === "live") setSrc("test"); show("needs"); };
+$("g-score").onclick = () => show("proof");
+$("g-run").onclick = async () => {
+  const note = $("g-run-note");
+  if (!RUNNER) {
+    note.hidden = false;
+    note.replaceChildren("This copy of the page can't start Docker. In a terminal, run ",
+      el("code", null, "python3 proof/run.py"), ", then come back: the requests appear here as it runs.",
+      ...(TEST_EXISTS ? [" Or ", Object.assign(el("button", "linkish", "look at the last test"), { type: "button", onclick: () => setSrc("test") }), "."] : []));
+    setSrc("test");
+    return;
+  }
+  try { await post("/api/run", { job: "proof", runs: 1 }); setSrc("test"); pollRun(); note.hidden = true; }
+  catch (e) { note.hidden = false; note.textContent = e.message; }
+};
 
 // ---- the diagram: one dot per new request, from the agent to the layer that decided, then out or into the tray
 const flow = $("flow");
@@ -607,7 +707,10 @@ function toast(title, body, small, action) {
 }
 
 async function pollMoves() {
-  const rows = await (await fetch(`/api/moves?after=${lastId}`)).json();
+  const asked = src;
+  const got = await (await fetch(`/api/moves?after=${lastId}&${qs()}`)).json();
+  if (asked !== src) return;  // switched source while this was in flight
+  const rows = got.filter((m) => m.id > lastId);  // two overlapping polls must not add a row twice
   if (!rows.length && booted) return;
   all = all.concat(rows).slice(-500);
   rows.forEach((m) => (lastId = Math.max(lastId, m.id)));
@@ -643,14 +746,16 @@ function ago(ts) {
 }
 
 async function pollSummary() {
-  const s = await (await fetch("/api/summary")).json();
+  const s = await (await fetch(`/api/summary?${qs()}`)).json();
   AGENTS = s.agents;
+  TEST_EXISTS = s.test_exists;
   const names = Object.keys(s.agents);
   // story line
   const story = $("story");
-  if (!s.passed && !s.stopped) story.textContent = "Nothing has gone through the checkpoint yet today.";
+  if (!s.passed && !s.stopped) story.textContent = src === "test" ? "No attack test has run yet. Use step 1 above."
+    : "Your agents haven't sent any requests today.";
   else {
-    story.replaceChildren(`Today ${names.join(" and ")} made ${plural(s.passed + s.stopped, "request")}. `,
+    story.replaceChildren(`${src === "test" ? "In the last attack test," : "Today"} ${names.join(" and ")} made ${plural(s.passed + s.stopped, "request")}. `,
       el("b", "p", `${s.passed} went through`), " and ", el("b", "s", `${s.stopped} ${s.stopped === 1 ? "was" : "were"} stopped`),
       s.waiting ? `; ${plural(s.waiting, "request is", "requests are")} waiting for you.` : ".");
   }
@@ -705,7 +810,8 @@ document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("c
 
 // ---- needs you
 async function loadNeeds() {
-  const e = await (await fetch("/api/escalations")).json();
+  $("needs-test-note").hidden = src !== "test";
+  const e = await (await fetch(`/api/escalations?${qs()}`)).json();
   $("waiting").replaceChildren(...e.waiting.map((r) => {
     const li = el("li", "esc");
     const main = el("div");
@@ -718,7 +824,7 @@ async function loadNeeds() {
       b.type = "button";
       b.onclick = async () => {
         act.querySelectorAll("button").forEach((x) => (x.disabled = true));
-        try { await post("/api/decide", { id: r.id, decision: d }); loadNeeds(); }
+        try { await post("/api/decide", { id: r.id, decision: d, src }); loadNeeds(); }
         catch (err) { act.append(el("span", "error", err.message)); act.querySelectorAll("button").forEach((x) => (x.disabled = false)); }
       };
       act.append(b);
@@ -765,7 +871,10 @@ async function loadLearn() {
       const actions = el("div", "row-actions");
       const b = el("button", "btn", "Start a learning run");
       b.type = "button";
-      b.onclick = async () => { try { await post("/api/learn/start", { agent: name }); loadLearn(); } catch (e) { err.textContent = e.message; } };
+      b.onclick = async () => {
+        if (!confirm(`While learning, new kinds of request from ${name} are let through and recorded (the rules still apply). Only do this while you're watching it.\n\nStart learning?`)) return;
+        try { await post("/api/learn/start", { agent: name }); loadLearn(); } catch (e) { err.textContent = e.message; }
+      };
       actions.append(b, el("span", "lede", "Only on a run you're watching: new kinds of request are let through while it learns."), err);
       box.append(actions);
       return box;
@@ -945,14 +1054,39 @@ function renderRunPanel(runner) {
   const status = el("span", "lede"); status.id = "run-status";
   row.append(label, go, checks, status);
   panel.append(el("p", "lede", "The test restarts the stack with fake keys and a fake internet, then stops it. Each run asks Muse about ten times. \"Check the setup\" runs the built-in self-tests."), row, el("pre", "log"));
-  const start = async (job) => { try { await post("/api/run", { job, runs: Number(runs.value) }); pollRun(); } catch (e) { status.textContent = e.message; } };
+  const start = async (job) => {
+    try { await post("/api/run", { job, runs: Number(runs.value) }); if (job === "proof") setSrc("test"); pollRun(); }
+    catch (e) { status.textContent = e.message; }
+  };
   go.onclick = () => start("proof");
   checks.onclick = () => start("checks");
 }
 
-let runTimer = null, lastRunning = false;
+let lastRunning = false, finishedAt = 0;
+function banner(r) {
+  const b = $("banner");
+  if (r.running && r.job === "proof") {
+    const show = el("button", "btn", "Watch it");
+    show.type = "button";
+    show.onclick = () => { setSrc("test"); show_("live"); };
+    b.replaceChildren(el("span", "spin"), el("p", null, `The attack test is running (started ${fmtTime(r.started)}, about two minutes). ` +
+      "First it runs with no protection, which isn't shown here; then the same attack goes through Heimdall and every request appears on What's happening."),
+      ...(src === "test" && view === "live" ? [] : [show]));
+    b.hidden = false;
+  } else if (finishedAt && Date.now() - finishedAt < 60000) {
+    const score = el("button", "btn", "See the score");
+    score.type = "button";
+    score.onclick = () => show_("proof");
+    b.replaceChildren(el("p", null, "The attack test finished."), score);
+    b.hidden = false;
+  } else b.hidden = true;
+}
 async function pollRun() {
   const r = await (await fetch("/api/run")).json();
+  RUNNER = r.runner;
+  if (lastRunning && !r.running && r.job === "proof") { finishedAt = Date.now(); if (view === "proof") loadProof(); }
+  lastRunning = r.running;
+  banner(r);
   const panel = $("run-panel"), log = panel.querySelector("pre.log"), status = $("run-status");
   if (!r.runner || !status) return;
   log.textContent = r.log.join("\n");
@@ -961,22 +1095,21 @@ async function pollRun() {
   const name = r.job === "proof" ? "Test" : "Setup check";
   if (r.running) status.textContent = `${name} running since ${fmtTime(r.started)}`;
   else if (r.job) status.textContent = r.exit === 0 ? `${name} finished` : `${name} failed (exit ${r.exit}); see the log`;
-  if (lastRunning && !r.running && r.job === "proof") loadProof();
-  lastRunning = r.running;
-  clearTimeout(runTimer);
-  if (r.running) runTimer = setTimeout(pollRun, 1500);
 }
 
 async function tick() {
   try {
     await pollSummary();
     await pollMoves();
+    await pollRun();
     if (view === "needs") loadNeeds();
   } catch (e) {
     $("live-status").replaceChildren(el("span", "dot down"), "This page can't reach its server. Is review/app.py running?");
   }
   setTimeout(tick, 1500);
 }
+if (store.get("heimdall-src") === "test") setSrc("test");
+guide(store.get("heimdall-guide") !== "closed");
 show(["live", "needs", "learn", "proof"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "live");
 tick();
 </script>
