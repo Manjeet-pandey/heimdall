@@ -15,6 +15,8 @@
   --stop-wash: #f6e3ea;
   --pass: #2f6f5e;
   --muse: #3355d1;
+  --flag: #946200;
+  --flag-wash: #f7eed7;
   --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }
@@ -29,6 +31,8 @@
     --stop-wash: #3a1f2a;
     --pass: #6cc3a7;
     --muse: #8ea6ff;
+    --flag: #e3b341;
+    --flag-wash: #3a311c;
   }
 }
 * { box-sizing: border-box; }
@@ -61,6 +65,9 @@ h1 {
 .dot.live { background: var(--pass); }
 .dot.down { background: var(--stop); }
 .dot.muse { background: var(--muse); }
+.dot.flag { background: var(--flag); }
+#strict { color: var(--flag); }
+#strict b { color: var(--flag); }
 .tally { margin-left: auto; display: flex; gap: 1.5rem; font-variant-numeric: tabular-nums; }
 .tally span { color: var(--muted); }
 .tally b { font-size: 1.35rem; margin-right: 0.3rem; }
@@ -101,6 +108,9 @@ h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
 .move.passed .out strong { color: var(--pass); }
 .move.muse .out strong { color: var(--muse); }
 .move.unchecked .out strong { color: var(--muted); }
+.move.flagged .out { background: var(--flag-wash); padding-right: 0.75rem; }
+.move.flagged .gate::before { left: 6px; width: 6px; background: var(--flag); }
+.move.flagged .out strong { color: var(--flag); }
 .move.stopped .out { background: var(--stop-wash); padding-right: 0.75rem; }
 .move.stopped .gate::before { left: 6px; width: 6px; background: var(--stop); }
 .move.stopped .out strong { color: var(--stop); }
@@ -162,6 +172,7 @@ aside .note { color: var(--muted); font-size: 0.85rem; }
   <div class="status" aria-live="polite">
     <span id="live"><span class="dot"></span>Waiting for the checkpoint</span>
     <span id="muse"><span class="dot"></span>Muse hasn't reviewed anything yet</span>
+    <span id="strict" hidden></span>
   </div>
   <div class="tally">
     <div class="s"><b id="n-stopped">0</b><span>stopped today</span></div>
@@ -210,6 +221,9 @@ const RULES = {
   "hard-rule:websocket": "the websocket rule",
   "hard-rule:error": "a checkpoint error (fail-closed)",
   "muse-reviewer": "Muse",
+  "muse-history": "Muse history review",
+  "strict-mode": "strict mode",
+  "promptguard": "PromptGuard",
   "off": "nothing (supervisor off)",
 };
 const ruleName = (w) => RULES[w] || w;
@@ -223,7 +237,8 @@ const feed = document.getElementById("feed");
 function render(m) {
   const stopped = m.verdict === "block";
   const byMuse = m.reviewer === "muse-reviewer";
-  const li = el("li", "move " + (stopped ? "stopped" : byMuse ? "muse" : m.reviewer === "off" ? "unchecked" : "passed"));
+  const flagged = m.verdict === "flag";
+  const li = el("li", "move " + (stopped ? "stopped" : flagged ? "flagged" : byMuse ? "muse" : m.reviewer === "off" ? "unchecked" : "passed"));
   li.dataset.stopped = stopped;
   const t = new Date(m.ts * 1000);
   li.append(el("time", "when", t.toLocaleTimeString([], { hour12: false })));
@@ -235,12 +250,15 @@ function render(m) {
   if (stopped) {
     out.append(el("strong", null, `Stopped by ${ruleName(m.reviewer)}`));
     out.append(el("p", null, stripMeta(m.reason)));
+  } else if (flagged) {
+    out.append(el("strong", null, "Flagged by PromptGuard, agent now in strict mode"));
+    out.append(el("p", null, m.reason));
   } else if (byMuse) {
     out.append(el("strong", null, "Passed by Muse, on budget"));
     out.append(el("p", null, stripMeta(m.reason)));
   } else {
-    out.append(el("strong", null, m.reviewer === "off" ? "Passed, unchecked" : "Passed"));
-    out.append(el("p", null, m.reason));
+    out.append(el("strong", null, m.reviewer === "off" ? "Passed, unchecked" : m.reviewer === "muse-history" ? "Passed, history reviewed" : "Passed"));
+    out.append(el("p", null, stripMeta(m.reason)));
   }
   li.append(out);
   if (filter === "stopped" && !stopped) li.hidden = true;
@@ -301,10 +319,16 @@ async function pollSummary() {
 
   const muse = document.getElementById("muse");
   const m = s.muse;
-  if (m.state === "down") muse.replaceChildren(el("span", "dot down"), "Muse unreachable, so unknown moves are blocked");
+  if (m.state === "down") muse.replaceChildren(el("span", "dot down"), "Muse isn't answering, so unknown moves are blocked");
   else if (m.state === "up") muse.replaceChildren(el("span", "dot muse"),
     `Muse is reviewing unknown moves` + (m.latency_ms ? ` (last verdict in ${m.latency_ms} ms)` : ""));
   else muse.replaceChildren(el("span", "dot"), "Muse hasn't reviewed anything yet");
+
+  const strictEl = document.getElementById("strict");
+  strictEl.hidden = !s.strict.length;
+  strictEl.replaceChildren(...(s.strict.length ? [el("span", "dot flag"),
+    `${s.strict.map((x) => x.agent).join(", ")} in strict mode since ${new Date(s.strict[0].since * 1000).toLocaleTimeString([], { hour12: false })}`] : []));
+  strictEl.title = "Read content PromptGuard flagged. Unknown moves are blocked and writes need Muse's OK.";
 
   const box = document.getElementById("budget");
   box.replaceChildren();

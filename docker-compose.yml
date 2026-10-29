@@ -6,6 +6,7 @@ networks:
   egress:
 volumes:
   mitm-conf:  # CA private key — checkpoint only
+  hf-cache:   # PromptGuard 2 weights
 services:
   checkpoint:
     image: mitmproxy/mitmproxy:11
@@ -26,6 +27,7 @@ services:
       - PYTHONPATH=/app
       - HEIMDALL_DB=/data/checkpoint.db
       - HEIMDALL_CA_OUT=/data/ca/mitmproxy-ca-cert.pem
+      - HEIMDALL_GUARD_URL=http://guard:8002
     healthcheck:
       test: ["CMD", "test", "-f", "/data/ca/mitmproxy-ca-cert.pem"]
       interval: 2s
@@ -59,6 +61,26 @@ services:
     depends_on:
       checkpoint:
         condition: service_healthy
+  guard:
+    # PromptGuard 2 on CPU. One-time model download (gated: accept the license on Hugging Face first):
+    #   HF_TOKEN=... docker compose run --rm -e HF_TOKEN -e HF_HUB_OFFLINE=0 guard python /app/guard.py --download
+    build:
+      context: ./reviewer
+      dockerfile: guard.Dockerfile
+    image: heimdall-guard
+    command: python /app/guard.py
+    user: "10000:10000"
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ./reviewer/guard.py:/app/guard.py:ro
+      - hf-cache:/hf
+    environment:
+      - HF_HOME=/hf
+      - HF_HUB_OFFLINE=1
+      - PROMPTGUARD_MODEL=${PROMPTGUARD_MODEL:-meta-llama/Llama-Prompt-Guard-2-86M}
+    networks:
+      - egress  # checkpoint only; agents can't probe it to tune injections
   review:
     image: python:3.12-slim
     command: python /app/review/app.py

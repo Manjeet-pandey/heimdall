@@ -54,16 +54,20 @@ def summary() -> dict:
         "select verdict, count(*) n from moves where ts >= ? group by verdict", (today,))}
     caught = query("select reviewer who, count(*) n from moves where ts >= ? and verdict = 'block' "
                    "group by reviewer order by n desc", (today,))
-    last_muse = query("select reason, ts from moves where reviewer = 'muse-reviewer' order by id desc limit 1")
+    last_muse = query("select reason, ts from moves where reviewer in ('muse-reviewer', 'muse-history') "
+                      "order by id desc limit 1")
     muse = {"state": "idle"}
     if last_muse:
         r = last_muse[0]["reason"]
         ms = re.search(r"\[muse (\d+)ms", r)
-        muse = {"state": "down" if "fail-closed" in r else "up", "latency_ms": int(ms.group(1)) if ms else None,
+        # Only a real Muse answer carries the "[muse Nms" marker; anything else means Muse didn't answer.
+        muse = {"state": "up" if ms else "down", "latency_ms": int(ms.group(1)) if ms else None,
                 "ts": last_muse[0]["ts"]}
     last = query("select max(ts) ts from moves")
-    return {"budget": budget, "stopped": counts.get("block", 0), "passed": sum(counts.values()) - counts.get("block", 0),
-            "caught": caught, "muse": muse, "last_ts": last[0]["ts"] if last else None}
+    strict = query("select agent, min(ts) since from moves where verdict = 'flag' and ts >= ? group by agent", (today,))
+    return {"budget": budget, "stopped": counts.get("block", 0),
+            "passed": counts.get("allow", 0) + counts.get("allow-with-budget", 0),
+            "caught": caught, "muse": muse, "strict": strict, "last_ts": last[0]["ts"] if last else None}
 
 
 class Handler(BaseHTTPRequestHandler):

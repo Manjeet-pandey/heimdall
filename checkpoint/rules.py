@@ -8,7 +8,7 @@ import urllib.parse
 
 from checkpoint.creds import PLACEHOLDERS
 
-# Agent -> {"allow_hosts": set, "path_rules": [(method, host_re, path_re, max_bytes)], "budget_day": int, "unknown_day": int}
+# Agent -> {"allow_hosts": set, "path_rules": [(method, host_re, path_re, max_bytes)], "budget_day": int, "unknown_day": int, "task": str}
 ALLOWLIST = {}
 # LLM hosts per agent — explicit set, not substring match. Filled from policy.json (learn-lock output).
 LLM_HOSTS: dict[str, set[str]] = {}
@@ -41,6 +41,7 @@ def load_policy(path) -> None:
             "path_rules": [tuple(r) for r in a["path_rules"]],
             "budget_day": a["budget_day"],
             "unknown_day": a.get("unknown_day", DEFAULT_UNKNOWN_DAY),
+            "task": a.get("task", ""),
         }
         LLM_HOSTS[agent] = set(a["llm_hosts"])
     PLACEHOLDERS.update({k: tuple(v) for k, v in p["placeholders"].items()})

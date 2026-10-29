@@ -72,5 +72,19 @@ if len(sent) != n + 1:
 if ("docs.python.org", "GET", "/repos/a/*") not in muse.CACHE or ("other.com", "GET", "/repos/a/*") in muse.CACHE:
     fails.append(f"cache key must include host: {list(muse.CACHE)}")
 
+# History review: task + history + redacted write go to Muse; failures come back as escalate.
+hist = [{"method": "GET", "host": "api.github.com", "path": "/repos/me/proj/issues/1", "bytes_out": 217, "verdict": "allow"}]
+fake(json.dumps({"verdict": "deny", "reason": "posts a connection string"}))
+got = muse.review_history("coder", "Fix CI", hist, "POST", "api.github.com", "/repos/me/proj/issues/1/comments",
+                          b'{"body":"DATABASE_URL=postgres://app:pw@db/prod ghp_abcdefgh12345"}')
+expect("history-deny", got, "deny", "[muse ")
+um = sent[-1]["messages"][1]["content"]
+if "<task>\nFix CI" not in um or "/repos/me/proj/issues/1 217B allow" not in um or "ghp_" in um:
+    fails.append(f"history prompt wrong or leaks: {um!r}")
+fake(TimeoutError())
+expect("history-down", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "escalate", "unavailable")
+os.environ.pop("META_MODEL_API_KEY")
+expect("history-no-key", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "escalate", "no Muse key")
+
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
 sys.exit(1 if fails else 0)
