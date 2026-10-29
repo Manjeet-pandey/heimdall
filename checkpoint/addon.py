@@ -96,6 +96,8 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
 
     if agent not in R.ALLOWLIST:
         return _block(flow, agent, nbytes, "unknown agent", "hard-rule:agent")
+    if req.stream:  # only if someone enables stream_large_bodies: the body would skip every check below
+        return _block(flow, agent, nbytes, "streamed request body refused (checks need the whole body)", "hard-rule:size")
     known_host = host in R.ALLOWLIST[agent]["allow_hosts"]
     for who, check in [
         ("hard-rule:size", lambda: R.check_sizes(req.url, header_bytes)),
@@ -156,7 +158,7 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
             if verdict != "allow-with-budget":
                 return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
 
-    reason = R.count_egress(agent, host, nbytes, known_host or (cap is None and learning))
+    reason = R.count_egress(agent, host, nbytes, known_host, learning=cap is None and learning)
     if reason:
         return _block(flow, agent, nbytes, reason, "hard-rule:budget")
     if who == "human":

@@ -202,10 +202,12 @@ def match_endpoint(agent: str, method: str, host: str, path: str) -> int | None:
     return None
 
 
-def count_egress(agent: str, host: str, nbytes: int, known_host: bool) -> str | None:
-    """Charge nbytes to today's budget; refuse (without charging) if it would go over the cap."""
+def count_egress(agent: str, host: str, nbytes: int, known_host: bool, learning: bool = False) -> str | None:
+    """Charge nbytes to today's budget; refuse (without charging) if it would go over the cap.
+    New hosts always share one bucket, learning included: rotating hosts must never multiply the allowance.
+    Learning only raises that shared bucket's cap to the normal daily budget."""
     a = ALLOWLIST.get(agent, {})
-    cap = a.get("budget_day", 0) if known_host else a.get("unknown_day", DEFAULT_UNKNOWN_DAY)
+    cap = a.get("budget_day", 0) if known_host or learning else a.get("unknown_day", DEFAULT_UNKNOWN_DAY)
     key = (time.strftime("%Y-%m-%d"), agent, host if known_host else UNKNOWN)
     used = BUDGET_USED.get(key, 0) + nbytes
     if used > cap:

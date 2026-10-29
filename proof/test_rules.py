@@ -93,6 +93,11 @@ check("budget-under", R.count_egress("coder", "a.com", 3000, False), False)
 check("budget-rotate-host", R.count_egress("coder", "b.com", 3000, False), True)
 check("budget-small-still-fits", R.count_egress("coder", "c.com", 1000, False), False)
 check("budget-known", R.count_egress("coder", OA, 10_000, True), False)
+# learning: new hosts get the normal cap, but in ONE shared bucket (audit finding: was one 50 MB bucket per host)
+R.BUDGET_USED.clear()
+cap = R.ALLOWLIST["coder"]["budget_day"]
+check("learn-big-ok", R.count_egress("coder", "a.example", cap - 10, False, learning=True), False)
+check("learn-rotate-host-shares-cap", R.count_egress("coder", "b.example", 100, False, learning=True), True)
 # sizes
 check("url-cap", R.check_sizes("x" * 9000, 0), True)
 check("header-cap", R.check_sizes("x", 20000), True)

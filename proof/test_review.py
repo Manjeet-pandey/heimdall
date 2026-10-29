@@ -57,6 +57,16 @@ check("summary-agents", app.summary()["agents"]["coder"]["allow_hosts"], ["api.g
 check("no-header", post("/api/decide", {"id": esc, "decision": "allow"}, header=False)[0], 403)
 check("rebinding-host", post("/api/decide", {"id": esc, "decision": "allow"}, host="evil.example:8000")[0], 403)
 check("foreign-origin", post("/api/decide", {"id": esc, "decision": "allow"}, origin="https://evil.example")[0], 403)
+def get(path, host=None):
+    c = http.client.HTTPConnection("127.0.0.1", port)
+    c.request("GET", path, headers={"Host": host or f"127.0.0.1:{port}"})
+    r = c.getresponse()
+    r.read()
+    return r.status
+
+
+check("get-rebinding-host", get("/api/summary", host="evil.example:8000"), 403)
+check("get-bad-after", get("/api/moves?after=abc"), 200)
 check("bad-decision", post("/api/decide", {"id": esc, "decision": "maybe"})[0], 400)
 check("unknown-escalation", post("/api/decide", {"id": 999, "decision": "allow"})[0], 400)
 

@@ -273,10 +273,14 @@ class Handler(BaseHTTPRequestHandler):
         u = urlsplit(self.path)
         if u.path == "/":
             return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+        # The data is redacted but still yours: DNS rebinding must not let another site read it either.
+        if u.path.startswith("/api/") and self.headers.get("Host") not in ALLOWED_HOSTS:
+            return self._json(403, {"error": "forbidden"})
         qs = parse_qs(u.query)
         db = source(qs.get("src", ["live"])[0])
         if u.path == "/api/moves":
-            return self._json(200, moves(int(qs.get("after", ["0"])[0] or 0), db))
+            after = qs.get("after", ["0"])[0]
+            return self._json(200, moves(int(after) if after.isdigit() else 0, db))
         if u.path in GETS:
             return self._json(200, GETS[u.path](db))
         return self._send(404, b"not found", "text/plain")

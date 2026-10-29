@@ -20,8 +20,8 @@ REDACT_RE = re.compile(
 
 
 def quote_redacted(text: str, limit: int = MAX_QUOTED) -> str:
-    t = text[:limit]
-    return REDACT_RE.sub("[REDACTED]", t)
+    # Redact before cutting: a key straddling the cut would otherwise keep its first characters.
+    return REDACT_RE.sub("[REDACTED]", text)[:limit]
 
 
 def path_template(path: str) -> str:

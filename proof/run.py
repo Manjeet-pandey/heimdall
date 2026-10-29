@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -31,6 +32,29 @@ def up(cond: str) -> None:
                    env=env, check=True, capture_output=True)
 
 
+RUNS_DIR = "data/attack-runs"  # one archived checkpoint log per run, for the summary
+
+
+def fresh_checkpoint(cond: str) -> None:
+    """Runs must be independent: a new checkpoint process (budget, strict mode, Muse cache live in memory)
+    and an empty log (history review and strict mode also read it). Otherwise run 3 is judged on runs 1-2."""
+    env = {**os.environ, "HEIMDALL_SUPERVISOR": cond}
+    subprocess.run(COMPOSE + ["stop", "checkpoint"], env=env, check=True, capture_output=True)
+    for f in ("data/attack.db", "data/attack.decisions.db"):
+        if os.path.exists(f):
+            os.remove(f)
+    subprocess.run(COMPOSE + ["up", "-d", "--wait", "--force-recreate", "--no-deps", "checkpoint"],
+                   env=env, check=True, capture_output=True)
+
+
+def archive(name: str) -> None:
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    src, dst = sqlite3.connect("data/attack.db"), sqlite3.connect(f"{RUNS_DIR}/{name}.db")
+    src.backup(dst)  # consistent copy even while the checkpoint still has the file open
+    src.close()
+    dst.close()
+
+
 def run_once(cond: str, run_id: str) -> tuple[list[dict], bool]:
     urllib.request.urlopen(urllib.request.Request(ADMIN + "/reset", method="POST"))
     env = sum((["-e", f"{k}={v}"] for k, v in {**AGENT_KEYS[cond], "RUN_ID": run_id}.items()), [])
@@ -48,20 +72,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=1)
     args = ap.parse_args()
-    t0 = time.time()
     # If your normal stack is up, the test borrows it and puts it back afterwards.
     was_up = bool(subprocess.run(["docker", "compose", "ps", "-q", "checkpoint"], capture_output=True, text=True).stdout.strip())
     # Fresh log per proof run: strict mode persists for the day, so a stale flag would skew this run.
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
-    for f in ("data/attack.db", "data/attack.decisions.db"):
-        if os.path.exists(f):
-            os.remove(f)
+    shutil.rmtree(RUNS_DIR, ignore_errors=True)
     moves, key_leaks = [], collections.Counter()
     try:
         for cond in ("off", "full"):
             up(cond)
             for i in range(args.runs):
+                fresh_checkpoint(cond)
                 ms, key_leak = run_once(cond, f"{uuid.uuid4().hex[:6]}")
+                archive(f"{cond}-{i + 1}")
                 moves += ms
                 key_leaks[cond] += key_leak
                 print(f"{cond} run {i + 1}/{args.runs}: {sum(m['leaked'] for m in ms)} variants leaked", file=sys.stderr)
@@ -77,13 +100,13 @@ def main() -> None:
         w = csv.DictWriter(f, fieldnames=["cond", "run", "attack", "variant", "status", "by", "leaked", "reason"])
         w.writeheader()
         w.writerows(moves)
-    summary = summarize(moves, key_leaks, args.runs, t0)
+    summary = summarize(moves, key_leaks, args.runs)
     with open("proof/out/summary.json", "w") as f:
         json.dump(summary, f, indent=1)
     report(summary)
 
 
-def summarize(moves: list[dict], key_leaks, n_runs: int, t0: float) -> dict:
+def summarize(moves: list[dict], key_leaks, n_runs: int) -> dict:
     """Everything the review page's Proof tab and the write-up need, in one file."""
     runs = {c: {m["run"] for m in moves if m["cond"] == c} for c in ("off", "full")}
     attacks = {a: {c: {"hit": len({m["run"] for m in moves if m["cond"] == c and m["attack"] == a and m["leaked"]}),
@@ -97,10 +120,16 @@ def summarize(moves: list[dict], key_leaks, n_runs: int, t0: float) -> dict:
             v["total"] += 1
             v["leaked"] += m["leaked"]
             v["caught_by"][m["by"] or ("leaked" if m["leaked"] else f"status {m['status']}")] += 1
-    db = sqlite3.connect("data/attack.db")
-    calls = [(int(ms), int(i) if i.isdigit() else 0, int(o) if o.isdigit() else 0)
-             for (r,) in db.execute("select reason from moves where ts >= ?", (t0,))
-             for ms, i, o in re.findall(r"\[muse (\d+)ms in=(\w+) out=(\w+)", r)]
+    calls, sent = [], collections.Counter()
+    for f in sorted(os.listdir(RUNS_DIR)):
+        db = sqlite3.connect(f"{RUNS_DIR}/{f}")
+        calls += [(int(ms), int(i) if i.isdigit() else 0, int(o) if o.isdigit() else 0)
+                  for (r,) in db.execute("select reason from moves")
+                  for ms, i, o in re.findall(r"\[muse (\d+)ms in=(\w+) out=(\w+)", r)]
+        for h, n in db.execute("select host, sum(bytes_out) from moves where verdict != 'block' "
+                               "and reviewer != 'off' group by host"):
+            sent[h] += n
+        db.close()
     lat = sorted(c[0] for c in calls)
     cost = [i * MUSE_USD_PER_M_IN / 1e6 + o * MUSE_USD_PER_M_OUT / 1e6 for _, i, o in calls]
     return {
@@ -110,9 +139,7 @@ def summarize(moves: list[dict], key_leaks, n_runs: int, t0: float) -> dict:
         "muse": {"verdicts": len(lat), "median_ms": lat[len(lat) // 2] if lat else None,
                  "p90_ms": lat[int(len(lat) * 0.9)] if lat else None,
                  "usd_per_verdict": sum(cost) / len(cost) if cost else None},
-        "bytes": [{"host": h, "bytes": n} for h, n in db.execute(
-            "select host, sum(bytes_out) from moves where ts >= ? and verdict != 'block' and reviewer != 'off' "
-            "group by host order by 2 desc", (t0,))],
+        "bytes": [{"host": h, "bytes": n} for h, n in sent.most_common()],
     }
 
 
