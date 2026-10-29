@@ -1,0 +1,27 @@
+# Attack / proof mode. Use only via proof/run.py:
+#   docker compose -f docker-compose.yml -f docker-compose.attack.yml up
+# Every upstream connection goes to the mock; the checkpoint holds fake keys (attacks/mock_server.py MOCK_KEYS).
+# Muse still uses META_MODEL_API_KEY from .env.secrets: the reviewer is what's being measured.
+services:
+  checkpoint:
+    environment:
+      - HEIMDALL_MOCK_UPSTREAM=mock:8000
+      - HEIMDALL_SUPERVISOR=${HEIMDALL_SUPERVISOR:-on}
+      - HEIMDALL_DB=/data/attack.db
+      - OPENAI_API_KEY=sk-mock-real-openai-9a8b7c6d5e4f
+      - GITHUB_TOKEN=ghp_mockrealgithub0123456789
+    depends_on: [mock]
+  mock:
+    image: python:3.12-slim
+    command: python /attacks/mock_server.py
+    user: "10000:10000"
+    read_only: true
+    volumes:
+      - ./attacks:/attacks:ro
+    networks:
+      - egress  # reachable by the checkpoint only, never by agents
+    ports:
+      - "127.0.0.1:8001:8001"  # admin: what the attacker saw (runner only)
+  coder:
+    volumes:
+      - ./attacks:/attacks:ro
