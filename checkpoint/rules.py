@@ -2,6 +2,7 @@
 
 import ipaddress
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -32,19 +33,41 @@ MAX_HEADERS = 16384
 DEFAULT_UNKNOWN_DAY = 4096
 
 
+POLICY_FILE = {"path": None, "mtime": None}
+
+
 def load_policy(path) -> None:
+    """Parse fully, then swap in one step (no await in between, so no request sees half a policy)."""
     with open(path) as f:
         p = json.load(f)
+    allow, llm = {}, {}
     for agent, a in p["agents"].items():
-        ALLOWLIST[agent] = {
+        allow[agent] = {
             "allow_hosts": set(a["allow_hosts"]),
             "path_rules": [tuple(r) for r in a["path_rules"]],
             "budget_day": a["budget_day"],
             "unknown_day": a.get("unknown_day", DEFAULT_UNKNOWN_DAY),
             "task": a.get("task", ""),
+            "mode": a.get("mode", "locked"),  # learn: unknown moves pass (hard rules still apply) and get recorded
         }
-        LLM_HOSTS[agent] = set(a["llm_hosts"])
+        llm[agent] = set(a["llm_hosts"])
+    ALLOWLIST.clear()
+    ALLOWLIST.update(allow)
+    LLM_HOSTS.clear()
+    LLM_HOSTS.update(llm)
+    PLACEHOLDERS.clear()
     PLACEHOLDERS.update({k: tuple(v) for k, v in p["placeholders"].items()})
+    POLICY_FILE.update(path=path, mtime=os.path.getmtime(path))
+
+
+def reload_if_changed() -> None:
+    """Pick up a lock / learn switch from the review page. A broken file keeps the last good policy."""
+    path = POLICY_FILE["path"]
+    if path and os.path.getmtime(path) != POLICY_FILE["mtime"]:
+        try:
+            load_policy(path)
+        except (ValueError, KeyError, TypeError):
+            POLICY_FILE["mtime"] = os.path.getmtime(path)  # don't re-parse a bad file on every request
 
 
 def is_ip_literal(host: str) -> bool:

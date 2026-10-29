@@ -11,6 +11,7 @@ if [ "${1:-}" = "--check" ]; then
   if [ -n "$missing" ]; then echo "check FAIL, missing:$missing"; exit 1; fi
   python3 proof/test_rules.py >/dev/null && echo "check OK: compose, rules, reviewer, tests pass" || { echo "check FAIL: test_rules failed"; exit 1; }
   python3 proof/test_muse.py >/dev/null && echo "check OK: Muse reviewer fail-closed" || { echo "check FAIL: test_muse failed"; exit 1; }
+  python3 proof/test_review.py >/dev/null && echo "check OK: review page guards, decisions, learn/lock" || { echo "check FAIL: test_review failed"; exit 1; }
   if python3 -c "import mitmproxy" 2>/dev/null; then
     python3 proof/test_addon.py >/dev/null && echo "check OK: full pipeline" || { echo "check FAIL: test_addon failed"; exit 1; }
   else

@@ -17,6 +17,9 @@
   --muse: #3355d1;
   --flag: #946200;
   --flag-wash: #f7eed7;
+  /* chart series: dataviz reference palette slots 1-2, validated against --panel (light) / dark panel */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
   --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }
@@ -33,6 +36,8 @@
     --muse: #8ea6ff;
     --flag: #e3b341;
     --flag-wash: #3a311c;
+    --series-1: #3987e5;
+    --series-2: #d95926;
   }
 }
 * { box-sizing: border-box; }
@@ -42,45 +47,72 @@ body {
   color: var(--ink);
   font: 15px/1.45 var(--sans);
 }
-a, button { color: inherit; font: inherit; }
+a, button, input { color: inherit; font: inherit; }
 :focus-visible { outline: 2px solid var(--muse); outline-offset: 2px; }
+code { font-family: var(--mono); font-size: 0.86rem; }
 
 header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.5rem 2rem;
-  padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 1.25rem;
-  border-bottom: 1px solid var(--rule);
+  padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 0;
 }
-h1 {
-  margin: 0;
-  font-size: 1.9rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
+h1 { margin: 0; font-size: 1.9rem; font-weight: 600; letter-spacing: -0.02em; }
 .status { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; color: var(--muted); }
-.status b { color: var(--ink); font-weight: 600; }
 .dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; background: var(--muted); }
 .dot.live { background: var(--pass); }
 .dot.down { background: var(--stop); }
 .dot.muse { background: var(--muse); }
 .dot.flag { background: var(--flag); }
 #strict { color: var(--flag); }
-#strict b { color: var(--flag); }
 .tally { margin-left: auto; display: flex; gap: 1.5rem; font-variant-numeric: tabular-nums; }
 .tally span { color: var(--muted); }
 .tally b { font-size: 1.35rem; margin-right: 0.3rem; }
 .tally .s b { color: var(--stop); }
 .tally .p b { color: var(--pass); }
 
-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 20rem;
-  gap: 0 clamp(1rem, 3vw, 2.5rem);
-  padding: 0 clamp(1rem, 3vw, 2.5rem) 3rem;
+nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 1.1rem clamp(1rem, 3vw, 2.5rem) 0;
+  border-bottom: 1px solid var(--rule);
+  overflow-x: auto;
 }
+nav button {
+  border: 0;
+  background: none;
+  padding: 0.5rem 0.9rem 0.6rem;
+  cursor: pointer;
+  color: var(--muted);
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+}
+nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+nav .count { display: inline-block; min-width: 1.4rem; margin-left: 0.35rem; padding: 0 0.4rem; border-radius: 999px; background: var(--stop); color: #fff; font-size: 0.78rem; font-weight: 600; text-align: center; }
+nav .count[hidden] { display: none; }
+
+.view { padding: 0 clamp(1rem, 3vw, 2.5rem) 3rem; }
+.view[hidden], #live[hidden] { display: none; }  /* #live's grid would otherwise beat [hidden] */
+#live { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 0 clamp(1rem, 3vw, 2.5rem); }
 h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
+h3 { font-size: 0.95rem; font-weight: 600; margin: 1.25rem 0 0.5rem; }
+.lede { color: var(--muted); max-width: 70ch; margin: 0.25rem 0 1rem; }
+.empty { color: var(--muted); padding: 1.5rem 0; max-width: 56ch; }
+
+.btn {
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn.allow { border-color: var(--pass); color: var(--pass); }
+.btn.deny { border-color: var(--stop); color: var(--stop); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.error { color: var(--stop); }
 
 .feedhead { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .filter { display: flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
@@ -89,22 +121,17 @@ h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
 
 /* The gate: one continuous line down the feed. Requests on the left, what happened at the gate on the right. */
 #feed { list-style: none; margin: 0; padding: 0; }
-.move {
-  display: grid;
-  grid-template-columns: 4.6rem minmax(0, 1fr) 18px minmax(0, 1fr);
-  align-items: stretch;
-}
+.move { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr) 18px minmax(0, 1fr); align-items: stretch; }
 .move > * { padding: 0.55rem 0; }
 .when { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; padding-top: 0.75rem; }
 .req { min-width: 0; padding-right: 0.9rem; text-align: right; }
-.req code { font: 0.86rem/1.4 var(--mono); overflow-wrap: anywhere; }
+.req code { overflow-wrap: anywhere; line-height: 1.4; }
 .req small { display: block; color: var(--muted); font-size: 0.78rem; }
 .gate { position: relative; padding: 0; }
 .gate::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--rule); }
 .out { padding-left: 0.9rem; min-width: 0; }
 .out strong { font-weight: 600; }
 .out p { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.88rem; overflow-wrap: anywhere; max-width: 60ch; }
-
 .move.passed .out strong { color: var(--pass); }
 .move.muse .out strong { color: var(--muse); }
 .move.unchecked .out strong { color: var(--muted); }
@@ -117,10 +144,7 @@ h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
 .move.fresh { animation: arrive 1.2s ease-out; }
 @keyframes arrive { from { background-color: var(--stop-wash); } }
 
-.empty { color: var(--muted); padding: 2rem 0; max-width: 48ch; }
-
-aside section + section { margin-top: 0.5rem; }
-.agent-name { font-weight: 600; margin: 0.25rem 0 0.5rem; }
+aside .agent-name { font-weight: 600; margin: 0.25rem 0 0.5rem; }
 .meter { margin-bottom: 0.9rem; }
 .meter .label { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.86rem; }
 .meter .label span:first-child { overflow-wrap: anywhere; }
@@ -133,36 +157,72 @@ aside section + section { margin-top: 0.5rem; }
 .caught li span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
 aside .note { color: var(--muted); font-size: 0.85rem; }
 
+/* Needs you: one row per escalated request */
+.esc-list { list-style: none; margin: 0; padding: 0; max-width: 62rem; }
+.esc { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.4rem 1.5rem; padding: 1rem 0 1rem 1rem; border-bottom: 1px solid var(--rule); border-left: 4px solid var(--stop); }
+.esc code { overflow-wrap: anywhere; display: block; }
+.esc .meta { color: var(--muted); font-size: 0.82rem; }
+.esc p { margin: 0.35rem 0 0; max-width: 64ch; }
+.esc .actions { display: flex; gap: 0.5rem; align-items: start; }
+.esc.decided { border-left-color: var(--rule); padding-top: 0.6rem; padding-bottom: 0.6rem; }
+.esc.decided .verdict-allow { color: var(--pass); font-weight: 600; }
+.esc.decided .verdict-deny { color: var(--stop); font-weight: 600; }
+
+/* Learn & lock */
+.agent-block { max-width: 70rem; margin-bottom: 2rem; }
+.mode { display: inline-block; padding: 0.05rem 0.55rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; margin-left: 0.5rem; }
+.mode.locked { background: var(--rule); }
+.mode.learn { background: var(--flag-wash); color: var(--flag); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th { text-align: left; font-weight: 600; color: var(--muted); padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--rule); }
+td { padding: 0.45rem 0.6rem 0.45rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td input[type="text"] { width: 100%; min-width: 14rem; font-family: var(--mono); font-size: 0.84rem; padding: 0.2rem 0.35rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); }
+td input[type="number"] { width: 6.5rem; padding: 0.2rem 0.35rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); text-align: right; }
+.table-wrap { overflow-x: auto; }
+.row-actions { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.9rem; flex-wrap: wrap; }
+
+/* Proof */
+.tiles { display: flex; flex-wrap: wrap; gap: 1rem 2.5rem; margin: 0.5rem 0 1.5rem; }
+.tile b { display: block; font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile span { color: var(--muted); font-size: 0.86rem; }
+.proof-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0 clamp(1rem, 3vw, 2.5rem); }
+.chart-card { margin-top: 1.25rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem 1rem 0.5rem; position: relative; max-width: 40rem; }
+.legend { display: flex; gap: 1.25rem; font-size: 0.86rem; color: var(--muted); margin-bottom: 0.25rem; }
+.legend i { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -0.05rem; }
+svg text { fill: var(--muted); font-family: var(--sans); font-size: 12px; }
+svg text.value { fill: var(--ink); font-weight: 600; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--paper); padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.82rem; max-width: 16rem; }
+.tip[hidden] { display: none; }
+.run-panel { max-width: 52rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem; }
+.run-panel label { color: var(--muted); font-size: 0.9rem; }
+.run-panel input { width: 4rem; padding: 0.25rem 0.4rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); }
+pre.log { background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 0.75rem; max-height: 22rem; overflow: auto; font: 0.8rem/1.45 var(--mono); white-space: pre-wrap; margin: 0.9rem 0 0; }
+pre.log:empty { display: none; }
+
 #toasts { position: fixed; bottom: 1rem; right: 1rem; display: grid; gap: 0.6rem; width: min(24rem, calc(100vw - 2rem)); z-index: 10; }
-.toast {
-  background: var(--panel);
-  border-left: 6px solid var(--stop);
-  border-radius: 4px;
-  padding: 0.75rem 2.2rem 0.75rem 0.9rem;
-  box-shadow: 0 6px 24px rgba(28, 36, 48, 0.18);
-  position: relative;
-  animation: drop 0.25s ease-out;
-}
+.toast { background: var(--panel); border-left: 6px solid var(--stop); border-radius: 4px; padding: 0.75rem 2.2rem 0.75rem 0.9rem; box-shadow: 0 6px 24px rgba(28, 36, 48, 0.18); position: relative; animation: drop 0.25s ease-out; }
 .toast strong { color: var(--stop); display: block; }
 .toast p { margin: 0.2rem 0 0; font-size: 0.88rem; overflow-wrap: anywhere; }
 .toast small { color: var(--muted); }
-.toast button { position: absolute; top: 0.4rem; right: 0.4rem; border: 0; background: none; cursor: pointer; font-size: 1.1rem; color: var(--muted); padding: 0.1rem 0.4rem; }
+.toast button.x { position: absolute; top: 0.4rem; right: 0.4rem; border: 0; background: none; cursor: pointer; font-size: 1.1rem; color: var(--muted); padding: 0.1rem 0.4rem; }
+.toast .btn { margin-top: 0.5rem; }
 @keyframes drop { from { transform: translateY(8px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .toast, .move.fresh { animation: none; } }
 
 @media (max-width: 900px) {
-  main { grid-template-columns: minmax(0, 1fr); }
+  #live, .proof-grid { grid-template-columns: minmax(0, 1fr); }
   .tally { margin-left: 0; }
 }
 @media (max-width: 600px) {
   .move { grid-template-columns: 8px minmax(0, 1fr); }
   .move .when { display: none; }
   .gate { grid-row: 1 / span 2; grid-column: 1; }
-  .gate::before { left: 0; }
-  .move.stopped .gate::before { left: 0; }
+  .gate::before, .move.stopped .gate::before, .move.flagged .gate::before { left: 0; }
   .req { text-align: left; padding: 0.55rem 0 0 0.75rem; grid-column: 2; }
   .out { grid-column: 2; padding: 0.2rem 0 0.7rem 0.75rem; }
   .move.stopped { background: var(--stop-wash); }
+  .esc { grid-template-columns: minmax(0, 1fr); }
 }
 </style>
 </head>
@@ -170,7 +230,7 @@ aside .note { color: var(--muted); font-size: 0.85rem; }
 <header>
   <h1>Heimdall</h1>
   <div class="status" aria-live="polite">
-    <span id="live"><span class="dot"></span>Waiting for the checkpoint</span>
+    <span id="live-status"><span class="dot"></span>Waiting for the checkpoint</span>
     <span id="muse"><span class="dot"></span>Muse hasn't reviewed anything yet</span>
     <span id="strict" hidden></span>
   </div>
@@ -180,105 +240,151 @@ aside .note { color: var(--muted); font-size: 0.85rem; }
   </div>
 </header>
 
-<main>
-  <section aria-labelledby="feed-h">
-    <div class="feedhead">
-      <h2 id="feed-h">What your agents tried</h2>
-      <div class="filter" role="group" aria-label="Show">
-        <button type="button" aria-pressed="true" data-f="all">All moves</button>
-        <button type="button" aria-pressed="false" data-f="stopped">Stopped only</button>
-      </div>
-    </div>
-    <ol id="feed" reversed></ol>
-    <p class="empty" id="empty">No moves yet. Start an agent with <code>docker compose up</code> and every request it makes shows up here, newest first.</p>
-  </section>
+<nav role="tablist" aria-label="Sections">
+  <button role="tab" id="tab-live" aria-controls="live" aria-selected="true" data-view="live">Live</button>
+  <button role="tab" id="tab-needs" aria-controls="needs" aria-selected="false" data-view="needs">Needs you<span class="count" id="n-waiting" hidden>0</span></button>
+  <button role="tab" id="tab-learn" aria-controls="learn" aria-selected="false" data-view="learn">Learn &amp; lock</button>
+  <button role="tab" id="tab-proof" aria-controls="proof" aria-selected="false" data-view="proof">Proof</button>
+</nav>
 
-  <aside>
-    <h2>Budget used today</h2>
-    <div id="budget"></div>
-    <h2>What stopped them today</h2>
-    <ul class="caught" id="caught"></ul>
-    <p class="note" id="caught-empty">Nothing stopped yet today.</p>
-  </aside>
+<main>
+  <div class="view" id="live" role="tabpanel" aria-labelledby="tab-live">
+    <section>
+      <div class="feedhead">
+        <h2>What your agents tried</h2>
+        <div class="filter" role="group" aria-label="Show">
+          <button type="button" aria-pressed="true" data-f="all">All moves</button>
+          <button type="button" aria-pressed="false" data-f="stopped">Stopped only</button>
+        </div>
+      </div>
+      <ol id="feed" reversed></ol>
+      <p class="empty" id="empty">No moves yet. Start an agent with <code>docker compose up</code> and every request it makes shows up here, newest first.</p>
+    </section>
+    <aside>
+      <h2>Budget used today</h2>
+      <div id="budget"></div>
+      <h2>What stopped them today</h2>
+      <ul class="caught" id="caught"></ul>
+      <p class="note" id="caught-empty">Nothing stopped yet today.</p>
+    </aside>
+  </div>
+
+  <div class="view" id="needs" role="tabpanel" aria-labelledby="tab-needs" hidden>
+    <h2>Requests waiting for you</h2>
+    <p class="lede">Muse wasn't sure about these, or the agent is in strict mode. The agent got a 403. Allow once lets
+      that exact request through the next time the agent sends it, still within its budget and every hard rule.
+      Deny keeps it blocked for good.</p>
+    <ul class="esc-list" id="waiting"></ul>
+    <p class="empty" id="waiting-empty">Nothing is waiting for you.</p>
+    <h3>Decided recently</h3>
+    <ul class="esc-list" id="decided"></ul>
+    <p class="empty" id="decided-empty">No decisions yet.</p>
+  </div>
+
+  <div class="view" id="learn" role="tabpanel" aria-labelledby="tab-learn" hidden>
+    <h2>Learn, then lock</h2>
+    <p class="lede">During a learning run, moves with no rule are let through and recorded. Hard rules still apply:
+      keys, private IPs, provider fetches, path tricks. Approve the moves that belong to the agent's job and lock. After
+      that, anything else goes to Muse and to you.</p>
+    <div id="agents"></div>
+  </div>
+
+  <div class="view" id="proof" role="tabpanel" aria-labelledby="tab-proof" hidden>
+    <h2>Does it stop leaks without breaking work?</h2>
+    <p class="lede">Each run sends the same 18 attack variants and one real task through the checkpoint twice: once with
+      the supervisor off, once fully on. All traffic goes to a local mock server; nothing leaves your machine except Muse
+      reviews.</p>
+    <div id="proof-body"></div>
+    <div class="proof-grid">
+      <div id="proof-chart"></div>
+      <div id="proof-table"></div>
+    </div>
+    <h3>Run it</h3>
+    <div class="run-panel" id="run-panel"></div>
+  </div>
 </main>
 
+<div class="tip" id="tip" hidden></div>
 <div id="toasts" aria-live="assertive"></div>
 
 <script>
-// Everything shown comes from agent traffic, so it is attacker-controlled: build DOM with textContent only.
+// Everything from the API that came from agent traffic is attacker-controlled: build DOM with textContent only.
 const RULES = {
-  "hard-rule:keys": "the key rule",
-  "hard-rule:provider-fetch": "the provider-fetch rule",
-  "hard-rule:dest": "the destination rule",
-  "hard-rule:sni": "the host check",
-  "hard-rule:path": "the path rule",
-  "hard-rule:endpoint": "the endpoint rule",
-  "hard-rule:budget": "the budget",
-  "hard-rule:upgrade": "the upgrade rule",
-  "hard-rule:encoding": "the encoding rule",
-  "hard-rule:size": "the size limit",
-  "hard-rule:agent": "the agent login check",
-  "hard-rule:websocket": "the websocket rule",
-  "hard-rule:error": "a checkpoint error (fail-closed)",
-  "muse-reviewer": "Muse",
-  "muse-history": "Muse history review",
-  "strict-mode": "strict mode",
-  "promptguard": "PromptGuard",
-  "off": "nothing (supervisor off)",
+  "hard-rule:keys": "the key rule", "hard-rule:provider-fetch": "the provider-fetch rule",
+  "hard-rule:dest": "the destination rule", "hard-rule:sni": "the host check", "hard-rule:path": "the path rule",
+  "hard-rule:endpoint": "the endpoint rule", "hard-rule:budget": "the budget", "hard-rule:upgrade": "the upgrade rule",
+  "hard-rule:encoding": "the encoding rule", "hard-rule:size": "the size limit", "hard-rule:agent": "the agent login check",
+  "hard-rule:websocket": "the websocket rule", "hard-rule:error": "a checkpoint error (fail-closed)",
+  "muse-reviewer": "Muse", "muse-history": "Muse history review", "strict-mode": "strict mode",
+  "promptguard": "PromptGuard", "human": "you", "learn-mode": "the learning run", "off": "nothing (supervisor off)",
 };
+const ATTACKS = { A1: "Poisoned issue, new host", A2: "Through the LLM provider", A3: "Stuffed into an allowed endpoint" };
+const ATTACKS_SHORT = { A1: "New host", A2: "Via LLM provider", A3: "Allowed endpoint" };  // axis labels must fit a slot
 const ruleName = (w) => RULES[w] || w;
+const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const stripMeta = (r) => r.replace(/\s*\[muse [^\]]*\]$/, "");
+const stripMeta = (r) => r.replace(/\s*\[muse [^\]]*\]/, "");
+const $ = (id) => document.getElementById(id);
 
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Heimdall": "1" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `request failed (${r.status})`);
+  return j;
+}
+
+// ---- tabs
+let view = "live";
+function show(v) {
+  view = v;
+  document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", b.dataset.view === v));
+  document.querySelectorAll(".view").forEach((p) => (p.hidden = p.id !== v));
+  if (location.hash !== `#${v}`) history.replaceState(null, "", `#${v}`);
+  refreshView();
+}
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
+
+// ---- live feed
 let lastId = 0, booted = false, filter = "all";
-const feed = document.getElementById("feed");
+const feed = $("feed");
 
 function render(m) {
-  const stopped = m.verdict === "block";
-  const byMuse = m.reviewer === "muse-reviewer";
-  const flagged = m.verdict === "flag";
-  const li = el("li", "move " + (stopped ? "stopped" : flagged ? "flagged" : byMuse ? "muse" : m.reviewer === "off" ? "unchecked" : "passed"));
+  const stopped = m.verdict === "block", flagged = m.verdict === "flag", byMuse = m.reviewer === "muse-reviewer";
+  const cls = stopped ? "stopped" : flagged ? "flagged" : byMuse ? "muse" : m.reviewer === "off" ? "unchecked" : "passed";
+  const li = el("li", "move " + cls);
   li.dataset.stopped = stopped;
-  const t = new Date(m.ts * 1000);
-  li.append(el("time", "when", t.toLocaleTimeString([], { hour12: false })));
+  li.append(el("time", "when", fmtTime(m.ts)));
   const req = el("div", "req");
-  req.append(el("code", null, `${m.host}${m.path}`));
-  req.append(el("small", null, `${m.method} by ${m.agent}, ${fmtBytes(m.bytes_out)}`));
+  req.append(el("code", null, `${m.host}${m.path}`), el("small", null, `${m.method} by ${m.agent}, ${fmtBytes(m.bytes_out)}`));
   li.append(req, el("div", "gate"));
   const out = el("div", "out");
-  if (stopped) {
-    out.append(el("strong", null, `Stopped by ${ruleName(m.reviewer)}`));
-    out.append(el("p", null, stripMeta(m.reason)));
-  } else if (flagged) {
-    out.append(el("strong", null, "Flagged by PromptGuard, agent now in strict mode"));
-    out.append(el("p", null, m.reason));
-  } else if (byMuse) {
-    out.append(el("strong", null, "Passed by Muse, on budget"));
-    out.append(el("p", null, stripMeta(m.reason)));
-  } else {
-    out.append(el("strong", null, m.reviewer === "off" ? "Passed, unchecked" : m.reviewer === "muse-history" ? "Passed, history reviewed" : "Passed"));
-    out.append(el("p", null, stripMeta(m.reason)));
-  }
+  let title;
+  if (stopped) title = /waiting for you|waiting for your decision|need you/.test(m.reason) ? `Stopped, waiting for you` : `Stopped by ${ruleName(m.reviewer)}`;
+  else if (flagged) title = "Flagged by PromptGuard, agent now in strict mode";
+  else if (m.verdict === "learn") title = "Recorded during learning";
+  else if (m.reviewer === "human") title = "Allowed by you";
+  else if (byMuse) title = "Passed by Muse, on budget";
+  else if (m.reviewer === "off") title = "Passed, unchecked";
+  else if (m.reviewer === "muse-history") title = "Passed, history reviewed";
+  else title = "Passed";
+  out.append(el("strong", null, title), el("p", null, stripMeta(m.reason)));
   li.append(out);
   if (filter === "stopped" && !stopped) li.hidden = true;
   return li;
 }
 
-function toast(m) {
+function toast(title, body, small, action) {
   const t = el("div", "toast");
-  t.append(el("strong", null, `Stopped ${m.agent} going to ${m.host}`));
-  t.append(el("p", null, stripMeta(m.reason)));
-  t.append(el("small", null, `Caught by ${ruleName(m.reviewer)}`));
-  const x = el("button", null, "×");
-  x.type = "button";
-  x.setAttribute("aria-label", "Dismiss");
-  x.onclick = () => t.remove();
+  t.append(el("strong", null, title), el("p", null, body), el("small", null, small));
+  if (action) { const b = el("button", "btn", action.label); b.type = "button"; b.onclick = () => { action.run(); t.remove(); }; t.append(b); }
+  const x = el("button", "x", "×"); x.type = "button"; x.setAttribute("aria-label", "Dismiss"); x.onclick = () => t.remove();
   t.append(x);
-  const box = document.getElementById("toasts");
+  const box = $("toasts");
   box.prepend(t);
   while (box.children.length > 3) box.lastChild.remove();
-  setTimeout(() => t.remove(), 8000);
+  setTimeout(() => t.remove(), 9000);
 }
 
 async function pollMoves() {
@@ -287,20 +393,24 @@ async function pollMoves() {
     const li = render(m);
     if (booted) li.classList.add("fresh");
     feed.prepend(li);
-    if (booted && m.verdict === "block") toast(m);
+    if (booted && m.verdict === "block") {
+      const waiting = /waiting for you|need you/.test(m.reason);
+      toast(waiting ? `${m.agent} needs you` : `Stopped ${m.agent} going to ${m.host}`, stripMeta(m.reason),
+        waiting ? `${m.method} ${m.host}${m.path}` : `Caught by ${ruleName(m.reviewer)}`,
+        waiting ? { label: "Review it", run: () => show("needs") } : null);
+    }
     lastId = Math.max(lastId, m.id);
   }
   while (feed.children.length > 500) feed.lastChild.remove();
-  document.getElementById("empty").hidden = feed.children.length > 0;
+  $("empty").hidden = feed.children.length > 0;
   booted = true;
 }
 
-function meter(label, used, cap) {
-  const d = el("div", "meter");
-  const l = el("div", "label");
-  l.append(el("span", null, label), el("span", null, `${fmtBytes(used)} of ${fmtBytes(cap)}`));
+function meter(label, used, capBytes) {
+  const d = el("div", "meter"), l = el("div", "label");
+  l.append(el("span", null, label), el("span", null, `${fmtBytes(used)} of ${fmtBytes(capBytes)}`));
   const bar = el("div", "bar"), fill = el("i");
-  const pct = cap ? Math.min(100, (used / cap) * 100) : 100;
+  const pct = capBytes ? Math.min(100, (used / capBytes) * 100) : 100;
   fill.style.width = `${Math.max(pct, used ? 1.5 : 0)}%`;
   if (pct >= 80) fill.className = "hot";
   bar.append(fill);
@@ -308,49 +418,41 @@ function meter(label, used, cap) {
   return d;
 }
 
+function ago(ts) {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+}
+
 async function pollSummary() {
   const s = await (await fetch("/api/summary")).json();
-  document.getElementById("n-stopped").textContent = s.stopped;
-  document.getElementById("n-passed").textContent = s.passed;
-
-  const live = document.getElementById("live");
-  live.replaceChildren(el("span", "dot" + (s.last_ts ? " live" : "")),
+  $("n-stopped").textContent = s.stopped;
+  $("n-passed").textContent = s.passed;
+  $("n-waiting").textContent = s.waiting;
+  $("n-waiting").hidden = !s.waiting;
+  $("live-status").replaceChildren(el("span", "dot" + (s.last_ts ? " live" : "")),
     s.last_ts ? `Checkpoint saw traffic ${ago(s.last_ts)}` : "No traffic through the checkpoint yet");
-
-  const muse = document.getElementById("muse");
   const m = s.muse;
-  if (m.state === "down") muse.replaceChildren(el("span", "dot down"), "Muse isn't answering, so unknown moves are blocked");
-  else if (m.state === "up") muse.replaceChildren(el("span", "dot muse"),
-    `Muse is reviewing unknown moves` + (m.latency_ms ? ` (last verdict in ${m.latency_ms} ms)` : ""));
-  else muse.replaceChildren(el("span", "dot"), "Muse hasn't reviewed anything yet");
+  if (m.state === "down") $("muse").replaceChildren(el("span", "dot down"), "Muse isn't answering, so unknown moves wait for you");
+  else if (m.state === "up") $("muse").replaceChildren(el("span", "dot muse"), "Muse is reviewing unknown moves" + (m.latency_ms ? ` (last verdict in ${m.latency_ms} ms)` : ""));
+  else $("muse").replaceChildren(el("span", "dot"), "Muse hasn't reviewed anything yet");
+  const learning = Object.entries(s.modes).filter(([, md]) => md === "learn").map(([a]) => a);
+  const strictEl = $("strict");
+  const notes = [];
+  if (s.strict.length) notes.push(`${s.strict.map((x) => x.agent).join(", ")} in strict mode since ${fmtTime(s.strict[0].since)}`);
+  if (learning.length) notes.push(`${learning.join(", ")} learning`);
+  strictEl.hidden = !notes.length;
+  strictEl.replaceChildren(...(notes.length ? [el("span", "dot flag"), notes.join("; ")] : []));
+  strictEl.title = "Strict mode: read content PromptGuard flagged. Unknown moves need you and writes need Muse's OK.";
 
-  const strictEl = document.getElementById("strict");
-  strictEl.hidden = !s.strict.length;
-  strictEl.replaceChildren(...(s.strict.length ? [el("span", "dot flag"),
-    `${s.strict.map((x) => x.agent).join(", ")} in strict mode since ${new Date(s.strict[0].since * 1000).toLocaleTimeString([], { hour12: false })}`] : []));
-  strictEl.title = "Read content PromptGuard flagged. Unknown moves are blocked and writes need Muse's OK.";
-
-  const box = document.getElementById("budget");
+  const box = $("budget");
   box.replaceChildren();
   let agent = null;
   for (const b of s.budget) {
     if (b.agent !== agent) { agent = b.agent; box.append(el("div", "agent-name", agent)); }
     box.append(meter(b.dest || "Unknown destinations (shared cap)", b.used, b.cap));
   }
-
-  const caught = document.getElementById("caught");
-  caught.replaceChildren(...s.caught.map((c) => {
-    const li = el("li");
-    const name = ruleName(c.who);
-    li.append(el("span", null, name.charAt(0).toUpperCase() + name.slice(1)), el("span", null, c.n));
-    return li;
-  }));
-  document.getElementById("caught-empty").hidden = s.caught.length > 0;
-}
-
-function ago(ts) {
-  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
-  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  $("caught").replaceChildren(...s.caught.map((c) => { const li = el("li"); li.append(el("span", null, cap1(ruleName(c.who))), el("span", null, c.n)); return li; }));
+  $("caught-empty").hidden = s.caught.length > 0;
 }
 
 document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("click", () => {
@@ -359,11 +461,276 @@ document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("c
   for (const li of feed.children) li.hidden = filter === "stopped" && li.dataset.stopped !== "true";
 }));
 
-async function tick() {
-  try { await Promise.all([pollMoves(), pollSummary()]); }
-  catch (e) { document.getElementById("live").replaceChildren(el("span", "dot down"), "Review page can't reach its server. Is review/app.py running?"); }
-  setTimeout(tick, 1000);
+// ---- needs you
+async function loadNeeds() {
+  const e = await (await fetch("/api/escalations")).json();
+  $("waiting").replaceChildren(...e.waiting.map((r) => {
+    const li = el("li", "esc");
+    const main = el("div");
+    main.append(el("code", null, `${r.method} ${r.host}${r.path}`),
+      el("span", "meta", `#${r.id}, ${r.agent}, ${fmtTime(r.ts)}`), el("p", null, stripMeta(r.reason)));
+    const act = el("div", "actions");
+    for (const [label, d, cls] of [["Allow once", "allow", "allow"], ["Deny", "deny", "deny"]]) {
+      const b = el("button", `btn ${cls}`, label);
+      b.type = "button";
+      b.onclick = async () => {
+        act.querySelectorAll("button").forEach((x) => (x.disabled = true));
+        try { await post("/api/decide", { id: r.id, decision: d }); loadNeeds(); }
+        catch (err) { act.append(el("span", "error", err.message)); act.querySelectorAll("button").forEach((x) => (x.disabled = false)); }
+      };
+      act.append(b);
+    }
+    li.append(main, act);
+    return li;
+  }));
+  $("waiting-empty").hidden = e.waiting.length > 0;
+  $("decided").replaceChildren(...e.done.map((r) => {
+    const li = el("li", "esc decided");
+    const main = el("div");
+    const v = el("span", `verdict-${r.decision}`, r.decision === "allow" ? (r.used ? "Allowed, went through" : "Allowed, waiting for the agent's retry") : "Denied");
+    main.append(v, el("code", null, `${r.method} ${r.host}${r.path}`), el("span", "meta", `#${r.id}, ${r.agent}, decided ${fmtTime(r.decided)}`));
+    li.append(main);
+    return li;
+  }));
+  $("decided-empty").hidden = e.done.length > 0;
 }
+
+// ---- learn & lock
+async function loadLearn() {
+  const agents = await (await fetch("/api/learn")).json();
+  const root = $("agents");  // not polled: a refresh would wipe the ticks and edits in progress
+  root.replaceChildren(...Object.entries(agents).map(([name, a]) => {
+    const box = el("section", "agent-block");
+    const h = el("h3", null, name);
+    h.append(el("span", `mode ${a.mode}`, a.mode === "learn" ? "learning" : "locked"));
+    box.append(h);
+    const err = el("p", "error");
+    if (a.mode === "locked") {
+      box.append(el("p", "lede", `${a.rules.length} rules in force. Anything outside them goes to Muse and to you.`));
+      box.append(rulesTable(a.rules));
+      const actions = el("div", "row-actions");
+      const b = el("button", "btn", "Start a learning run");
+      b.type = "button";
+      b.onclick = async () => { try { await post("/api/learn/start", { agent: name }); loadLearn(); } catch (e) { err.textContent = e.message; } };
+      actions.append(b, el("span", "lede", "Only on a run you watch: moves with no rule pass while learning."), err);
+      box.append(actions);
+      return box;
+    }
+    box.append(el("p", "lede", `Learning since ${fmtTime(a.learn_since)}. ${a.moves.length} new kinds of move recorded so far. Tick the ones that belong to the job; widen or tighten each path pattern and size cap before locking.`));
+    const wrap = el("div", "table-wrap"), t = el("table");
+    const head = el("tr");
+    for (const [txt, c] of [["Approve", ""], ["Move", ""], ["Path pattern", ""], ["Max body bytes", "num"], ["Seen", "num"]]) head.append(el("th", c, txt));
+    t.append(head);
+    const rows = a.moves.map((mv) => {
+      const tr = el("tr");
+      const cb = el("input"); cb.type = "checkbox"; cb.setAttribute("aria-label", `Approve ${mv.method} ${mv.host}${mv.example}`);
+      const re = el("input"); re.type = "text"; re.value = mv.path_re; re.setAttribute("aria-label", "Path pattern");
+      const mb = el("input"); mb.type = "number"; mb.min = 0; mb.max = 1048576; mb.value = mv.max_bytes; mb.setAttribute("aria-label", "Max body bytes");
+      const c1 = el("td"); c1.append(cb);
+      const c2 = el("td"); c2.append(el("code", null, `${mv.method} ${mv.host}`), el("div", "lede", `e.g. ${mv.example}`));
+      const c3 = el("td"); c3.append(re);
+      const c4 = el("td", "num"); c4.append(mb);
+      tr.append(c1, c2, c3, c4, el("td", "num", mv.count));
+      t.append(tr);
+      return { mv, cb, re, mb };
+    });
+    wrap.append(t);
+    box.append(a.moves.length ? wrap : el("p", "empty", "Nothing recorded yet. Let the agent do its job; new kinds of move show up here."));
+    const actions = el("div", "row-actions");
+    const more = el("button", "btn", "Check for new moves");
+    more.type = "button";
+    more.onclick = loadLearn;
+    const lockBtn = el("button", "btn primary", "Lock with 0 approved moves");
+    lockBtn.type = "button";
+    const sync = () => (lockBtn.textContent = `Lock with ${rows.filter((r) => r.cb.checked).length} approved moves`);
+    rows.forEach((r) => r.cb.addEventListener("change", sync));
+    lockBtn.onclick = async () => {
+      const rules = rows.filter((r) => r.cb.checked).map((r) => ({ method: r.mv.method, host: r.mv.host, path_re: r.re.value, max_bytes: Number(r.mb.value) }));
+      try { await post("/api/lock", { agent: name, rules }); err.textContent = ""; loadLearn(); } catch (e) { err.textContent = e.message; }
+    };
+    actions.append(lockBtn, more, err);
+    box.append(actions);
+    return box;
+  }));
+}
+
+function rulesTable(rules) {
+  const wrap = el("div", "table-wrap"), t = el("table"), head = el("tr");
+  for (const [txt, c] of [["Method", ""], ["Host", ""], ["Path pattern", ""], ["Max body bytes", "num"]]) head.append(el("th", c, txt));
+  t.append(head);
+  for (const r of rules) {
+    const tr = el("tr");
+    const host = el("td"); host.append(el("code", null, r.host_re.replace(/\\\./g, ".")));
+    const p = el("td"); p.append(el("code", null, r.path_re));
+    tr.append(el("td", null, r.method), host, p, el("td", "num", r.max_bytes.toLocaleString()));
+    t.append(tr);
+  }
+  wrap.append(t);
+  return wrap;
+}
+
+// ---- proof
+const NS = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+function chart(s) {
+  // Grouped bars: attack success rate per attack, full supervisor (series 1) vs no supervisor (series 2).
+  const card = el("div", "chart-card");
+  const legend = el("div", "legend");
+  for (const [label, v] of [["Full supervisor", "--series-1"], ["No supervisor", "--series-2"]]) {
+    const i = el("i"); i.style.background = `var(${v})`;
+    const span = el("span"); span.append(i, label); legend.append(span);
+  }
+  card.append(el("h3", null, "Attack success rate"), legend);
+  const W = 520, H = 230, L = 40, B = 40, T = 22, plotH = H - B - T, bw = 34, gap = 2;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img",
+    "aria-label": "Attack success rate per attack with and without the supervisor. The table below has the numbers." });
+  for (const pct of [0, 50, 100]) {
+    const y = T + plotH * (1 - pct / 100);
+    svg.append(svgEl("line", { x1: L, x2: W - 8, y1: y, y2: y, stroke: "var(--rule)", "stroke-width": pct ? 1 : 1.5 }));
+    const t = svgEl("text", { x: L - 8, y: y + 4, "text-anchor": "end" }); t.textContent = `${pct}%`; svg.append(t);
+  }
+  const keys = Object.keys(s.attacks), slot = (W - L - 8) / keys.length;
+  const tip = $("tip");
+  keys.forEach((a, i) => {
+    const cx = L + slot * i + slot / 2;
+    [["full", "--series-1", "Full supervisor"], ["off", "--series-2", "No supervisor"]].forEach(([cond, color, label], j) => {
+      const c = s.attacks[a][cond], rate = c.runs ? c.hit / c.runs : 0;
+      const x = cx + (j === 0 ? -bw - gap / 2 : gap / 2), h = Math.max(rate * plotH, 0), y = T + plotH - h;
+      if (h > 0) {
+        const r = Math.min(4, h);  // 4px rounded data end, square at the baseline
+        svg.append(svgEl("path", { fill: `var(${color})`,
+          d: `M${x},${T + plotH} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${T + plotH} Z` }));
+      } else {
+        svg.append(svgEl("rect", { x, y: T + plotH - 2, width: bw, height: 2, fill: `var(${color})` }));
+      }
+      const v = svgEl("text", { x: x + bw / 2, y: y - 6, "text-anchor": "middle", class: "value" });
+      v.textContent = `${Math.round(rate * 100)}%`;
+      svg.append(v);
+      const hit = svgEl("rect", { x: x - 2, y: T, width: bw + 4, height: plotH, fill: "transparent", tabindex: 0 });
+      const text = `${ATTACKS[a] || a}, ${label}: leaked in ${c.hit} of ${c.runs} runs`;
+      hit.setAttribute("aria-label", text);
+      const showTip = (ev) => {
+        tip.textContent = text; tip.hidden = false;
+        const br = hit.getBoundingClientRect();
+        tip.style.left = `${br.left + window.scrollX}px`; tip.style.top = `${br.top + window.scrollY - 44}px`;
+      };
+      hit.addEventListener("mouseenter", showTip); hit.addEventListener("focus", showTip);
+      hit.addEventListener("mouseleave", () => (tip.hidden = true)); hit.addEventListener("blur", () => (tip.hidden = true));
+      svg.append(hit);
+    });
+    const lab = svgEl("text", { x: cx, y: H - B + 18, "text-anchor": "middle" }); lab.textContent = ATTACKS_SHORT[a] || a; svg.append(lab);
+  });
+  card.append(svg);
+  return card;
+}
+
+function variantsTable(s) {
+  const wrap = el("div", "table-wrap"), t = el("table"), head = el("tr");
+  for (const [txt, c] of [["Variant (full supervisor)", ""], ["Leaked", "num"], ["Caught by", ""]]) head.append(el("th", c, txt));
+  t.append(head);
+  for (const v of s.variants) {
+    const tr = el("tr");
+    const by = Object.entries(v.caught_by).map(([w, n]) => `${cap1(ruleName(w))}${n > 1 ? ` x${n}` : ""}`).join(", ");
+    tr.append(el("td", null, v.name), el("td", "num", `${v.leaked} of ${v.total}`), el("td", null, by));
+    t.append(tr);
+  }
+  wrap.append(t);
+  return wrap;
+}
+
+async function loadProof() {
+  const p = await (await fetch("/api/proof")).json();
+  const s = p.summary, body = $("proof-body"), chartBox = $("proof-chart"), tableBox = $("proof-table");
+  if (!s) {
+    body.replaceChildren(el("p", "empty", "No proof run yet. Run one below; a single run takes about two minutes."));
+    chartBox.replaceChildren();
+    tableBox.replaceChildren();
+  } else {
+    const off = Object.values(s.attacks).reduce((n, a) => n + a.off.hit, 0), full = Object.values(s.attacks).reduce((n, a) => n + a.full.hit, 0);
+    const total = Object.values(s.attacks).reduce((n, a) => n + a.full.runs, 0);
+    const tiles = el("div", "tiles");
+    const tile = (big, small) => { const d = el("div", "tile"); d.append(el("b", null, big), el("span", null, small)); return d; };
+    tiles.append(
+      tile(`${full} of ${total}`, "attack runs leaked with Heimdall"),
+      tile(`${off} of ${total}`, "leaked with no supervisor"),
+      tile(`${s.task.full.done} of ${s.task.full.runs}`, "real tasks finished with Heimdall"),
+      tile(`${s.key_leaks.full || 0}`, "real keys reached the attacker"),
+      tile(s.muse.median_ms ? `${(s.muse.median_ms / 1000).toFixed(1)} s` : "none", s.muse.median_ms ? `median Muse verdict (${s.muse.verdicts} verdicts)` : "Muse verdicts (no key?)"),
+      tile(s.muse.usd_per_verdict ? `$${s.muse.usd_per_verdict.toFixed(4)}` : "n/a", "est. cost per Muse verdict"),
+    );
+    body.replaceChildren(tiles, el("p", "lede", `${s.runs} run${s.runs > 1 ? "s" : ""} per condition, finished ${new Date(s.finished * 1000).toLocaleString()}.`));
+    chartBox.replaceChildren(chart(s));
+    tableBox.replaceChildren(el("h3", null, "What caught each variant"), variantsTable(s));
+    if (s.bytes.length) {
+      chartBox.append(el("h3", null, "Bytes out per destination, allowed moves only"));
+      const ul = el("ul", "caught");
+      for (const b of s.bytes) { const li = el("li"); li.append(el("span", null, b.host), el("span", null, fmtBytes(b.bytes))); ul.append(li); }
+      chartBox.append(ul);
+    }
+  }
+  renderRunPanel(p.runner);
+}
+
+let runPanelBuilt = false;
+function renderRunPanel(runner) {
+  const panel = $("run-panel");
+  if (runPanelBuilt) return;
+  runPanelBuilt = true;
+  if (!runner) {
+    panel.append(el("p", null, "Run buttons need Docker, so they only work when this page runs on your machine:"),
+      el("pre", "log", "python3 review/app.py"),
+      el("p", "lede", "Or run them in a terminal:"), el("pre", "log", "python3 proof/run.py --runs 5\n./demo/demo.sh --check"));
+    return;
+  }
+  const row = el("div", "row-actions");
+  const label = el("label", null, "Runs per condition ");
+  const runs = el("input"); runs.type = "number"; runs.min = 1; runs.max = 10; runs.value = 1; runs.id = "runs";
+  label.append(runs);
+  const go = el("button", "btn primary", "Run proof"); go.type = "button"; go.id = "run-proof";
+  const checks = el("button", "btn", "Run backstage checks"); checks.type = "button"; checks.id = "run-checks";
+  const status = el("span", "lede"); status.id = "run-status";
+  row.append(label, go, checks, status);
+  panel.append(el("p", "lede", "Running the proof restarts the stack in attack mode with fake keys, then stops it. Each run makes about ten Muse calls."), row, el("pre", "log"));
+  const start = async (job) => {
+    try { await post("/api/run", { job, runs: Number(runs.value) }); pollRun(); } catch (e) { status.textContent = e.message; }
+  };
+  go.onclick = () => start("proof");
+  checks.onclick = () => start("checks");
+}
+
+let runTimer = null, lastRunning = false;
+async function pollRun() {
+  const r = await (await fetch("/api/run")).json();
+  const panel = $("run-panel"), log = panel.querySelector("pre.log"), status = $("run-status");
+  if (!r.runner || !status) return;
+  log.textContent = r.log.join("\n");
+  log.scrollTop = log.scrollHeight;
+  panel.querySelectorAll("button").forEach((b) => (b.disabled = r.running));
+  if (r.running) status.textContent = `${r.job === "proof" ? "Proof" : "Checks"} running, started ${fmtTime(r.started)}`;
+  else if (r.job) status.textContent = r.exit === 0 ? `${r.job === "proof" ? "Proof" : "Checks"} finished` : `${r.job} failed (exit ${r.exit}); see the log`;
+  if (lastRunning && !r.running && r.job === "proof") loadProof();
+  lastRunning = r.running;
+  clearTimeout(runTimer);
+  if (r.running) runTimer = setTimeout(pollRun, 1500);
+}
+
+// ---- polling
+function refreshView() {
+  if (view === "needs") loadNeeds();
+  if (view === "learn") loadLearn();
+  if (view === "proof") { loadProof(); pollRun(); }
+}
+async function tick() {
+  try {
+    await Promise.all([pollMoves(), pollSummary()]);
+    if (view === "needs") loadNeeds();
+  } catch (e) {
+    $("live-status").replaceChildren(el("span", "dot down"), "Review page can't reach its server. Is review/app.py running?");
+  }
+  setTimeout(tick, 1500);
+}
+show(["live", "needs", "learn", "proof"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "live");
 tick();
 </script>
 </body>

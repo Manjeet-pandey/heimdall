@@ -28,6 +28,8 @@ services:
       - HEIMDALL_DB=/data/checkpoint.db
       - HEIMDALL_CA_OUT=/data/ca/mitmproxy-ca-cert.pem
       - HEIMDALL_GUARD_URL=http://guard:8002
+      - HEIMDALL_POLICY=/data/policy.json  # live, written by the review page's lock
+      - HEIMDALL_POLICY_SEED=/app/checkpoint/policy.json
     healthcheck:
       test: ["CMD", "test", "-f", "/data/ca/mitmproxy-ca-cert.pem"]
       interval: 2s
@@ -89,10 +91,13 @@ services:
     working_dir: /app
     volumes:
       - ./review:/app/review:ro
-      - ./checkpoint/policy.json:/app/checkpoint/policy.json:ro
-      - ./data:/app/data:ro
+      - ./checkpoint:/app/checkpoint:ro
+      - ./data:/app/data  # writes only its decisions file and the live policy
+      - ./proof/out:/app/proof/out:ro
     environment:
       - HEIMDALL_DB=/app/data/checkpoint.db
+      - HEIMDALL_POLICY=/app/data/policy.json
       - REVIEW_BIND=0.0.0.0
+      - REVIEW_RUNNER=0  # no docker in here; run `python3 review/app.py` on the host for the Run buttons
     ports:
       - "127.0.0.1:8000:8000"  # review page, localhost only

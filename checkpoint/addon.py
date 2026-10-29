@@ -3,6 +3,7 @@ Every hook fails closed: an exception in a mitmproxy addon otherwise lets the fl
 Run with --set connection_strategy=lazy so nothing connects (or resolves) before request() decides."""
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -15,11 +16,18 @@ from mitmproxy import ctx, http
 
 from checkpoint import rules as R
 from checkpoint.creds import swap_placeholders
-from checkpoint.db import connect, flagged_today, log, recent
+from checkpoint.db import connect, escalate, flagged_today, human_decision, log, mark_used, open_escalation, recent
 from reviewer.muse import quote_redacted, review_history, review_unknown
 
-R.load_policy(os.environ.get("HEIMDALL_POLICY", Path(__file__).with_name("policy.json")))
-DB = connect(os.environ.get("HEIMDALL_DB", "checkpoint.db"))
+# Live policy is writable (the review page locks learned moves into it); first start copies the repo's seed.
+POLICY = os.environ.get("HEIMDALL_POLICY", str(Path(__file__).with_name("policy.json")))
+if not os.path.exists(POLICY):
+    shutil.copy(os.environ.get("HEIMDALL_POLICY_SEED", Path(__file__).with_name("policy.json")), POLICY)
+R.load_policy(POLICY)
+DB_PATH = os.environ.get("HEIMDALL_DB", "checkpoint.db")
+DB = connect(DB_PATH)
+# Human answers to escalations, written only by the review page. Named after the DB: escalation ids are per DB.
+DECISIONS = os.path.splitext(DB_PATH)[0] + ".decisions.db"
 # Attack/proof runs: every upstream connection goes to the mock server, never the internet.
 MOCK = os.environ.get("HEIMDALL_MOCK_UPSTREAM")  # "mock:8000"
 # Proof baseline ("no supervisor"): forward everything unchecked. Refuses to run outside mock mode.
@@ -77,6 +85,7 @@ async def request(flow: http.HTTPFlow) -> None:
 
 
 async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
+    R.reload_if_changed()
     req = flow.request
     host = req.host.lower()
     path = req.path.split("?", 1)[0]
@@ -118,20 +127,40 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
             if hv == "deny" or (strict and hv != "allow-with-budget"):
                 return _block(flow, agent, nbytes, f"{hv}{' (strict mode)' if strict else ''}: {hwhy}", "muse-history")
             verdict, why, who = "allow", f"endpoint rule; history {hv}: {hwhy}", "muse-history"
-    elif agent in STRICT:
-        return _block(flow, agent, nbytes, "strict mode: agent read flagged content, unknown moves blocked",
-                      "strict-mode")
     else:
-        # Unknown move: only an exact allow-with-budget passes; anything else (deny, escalate, garbage) blocks.
-        # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
-        verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
-        who = "muse-reviewer"
-        if verdict != "allow-with-budget":
-            return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
+        # Unknown move. The exact request (method, URL incl. query, body) keys the human queue.
+        req_sha = hashlib.sha256(f"{req.method} {host}{req.path}\n".encode() + body).hexdigest()
+        shown = quote_redacted(path, 512)
+        esc = open_escalation(DB, agent, req_sha)
+        learning = R.ALLOWLIST[agent]["mode"] == "learn" and agent not in STRICT
+        if esc is not None:
+            decision = human_decision(DECISIONS, esc)
+            if decision != "allow":
+                why = "denied by you" if decision == "deny" else "waiting for your decision"
+                return _block(flow, agent, nbytes, f"{why} (escalation #{esc})", "human")
+            verdict, why, who = "allow", f"approved by you (escalation #{esc})", "human"
+        elif learning:
+            verdict, why, who = "learn", "learning run: recorded for your approval", "learn-mode"
+        elif agent in STRICT:
+            esc = escalate(DB, agent, req.method, host, shown, req_sha, "strict mode: agent read flagged content")
+            return _block(flow, agent, nbytes, f"strict mode: unknown moves need you (escalation #{esc})",
+                          "strict-mode")
+        else:
+            # Only an exact allow-with-budget passes; escalate goes to the human queue; anything else blocks.
+            # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
+            verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
+            who = "muse-reviewer"
+            if verdict == "escalate":
+                esc = escalate(DB, agent, req.method, host, shown, req_sha, quote_redacted(why, 512))
+                return _block(flow, agent, nbytes, f"escalate: {why} (escalation #{esc}, waiting for you)", who)
+            if verdict != "allow-with-budget":
+                return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
 
-    reason = R.count_egress(agent, host, nbytes, known_host)
+    reason = R.count_egress(agent, host, nbytes, known_host or (cap is None and learning))
     if reason:
         return _block(flow, agent, nbytes, reason, "hard-rule:budget")
+    if who == "human":
+        mark_used(DB, esc)  # one approval, one request: consumed only once it actually goes out
     swap_placeholders(agent, host, req.headers)
     _log(flow, agent, nbytes, verdict, why, who)
 

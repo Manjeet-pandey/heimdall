@@ -123,6 +123,50 @@ if rows[-1] != ("api.github.com", "flag", "promptguard"):
 addon.STRICT.clear()
 addon.GUARD_URL = None
 
+# Human queue: Muse escalates -> 403 + escalation; you allow -> the identical retry passes once; deny sticks.
+import json as _json, shutil as _shutil, sqlite3 as _sqlite3, tempfile as _tempfile
+tmp = _tempfile.mkdtemp()
+addon.DECISIONS = f"{tmp}/decisions.db"
+def answer(esc_id, decision):
+    c = _sqlite3.connect(addon.DECISIONS)
+    c.execute("CREATE TABLE IF NOT EXISTS decisions(esc_id INTEGER PRIMARY KEY, decision TEXT, ts REAL)")
+    c.execute("INSERT INTO decisions VALUES(?,?,0)", (esc_id, decision))
+    c.commit()
+os.environ["META_MODEL_API_KEY"] = "test-not-real"
+muse._post = lambda payload, key: {"choices": [{"message": {"content":
+    '{"verdict": "escalate", "reason": "unclear purpose"}'}}], "usage": {}}
+probe = ("docs.example.org", "/q?x=1")
+f1 = flow(*probe, method="GET", body=b"")
+expect("escalate-blocks", f1, True, "waiting for you")
+esc = addon.DB.execute("select max(id) from escalations").fetchone()[0]
+expect("pending-stays-blocked", flow(*probe, method="GET", body=b""), True, "waiting for your decision")
+expect("other-request-not-covered", flow("docs.example.org", "/q?x=2", method="GET", body=b""), True, "escalat")
+answer(esc, "allow")
+expect("approved-retry-passes", flow(*probe, method="GET", body=b""), False)
+expect("approval-used-once", flow(*probe, method="GET", body=b""), True, "waiting for you")
+esc2 = addon.DB.execute("select max(id) from escalations").fetchone()[0]
+answer(esc2, "deny")
+expect("denied-sticks", flow(*probe, method="GET", body=b""), True, "denied by you")
+expect("approval-never-beats-hard-rule", flow("docs.example.org", "/q", body=PH_OA.encode()), True, "tripwire")
+
+# Learn mode: unknown moves pass and are recorded; hard rules still apply. Policy reloads from disk.
+pol = _json.load(open("checkpoint/policy.json"))
+pol["agents"]["coder"]["mode"] = "learn"
+_json.dump(pol, open(f"{tmp}/policy.json", "w"))
+R.load_policy(f"{tmp}/policy.json")
+expect("learn-records", flow("pypi.org", "/simple/requests/", method="GET", body=b""), False)
+if addon.DB.execute("select verdict from moves order by id desc limit 1").fetchone()[0] != "learn":
+    fails.append("learn move not logged as learn")
+expect("learn-keeps-hard-rules", flow("pypi.org", "/x", body=PH_OA.encode()), True, "tripwire")
+pol["agents"]["coder"]["mode"] = "locked"
+_json.dump(pol, open(f"{tmp}/policy.json.new", "w"))
+os.replace(f"{tmp}/policy.json.new", f"{tmp}/policy.json")
+os.utime(f"{tmp}/policy.json", (1, 1))  # force a different mtime even within the same second
+expect("lock-reloads", flow("pypi.org", "/simple/requests/", method="GET", body=b""), True, "waiting for you")
+R.load_policy("checkpoint/policy.json")
+os.environ.pop("META_MODEL_API_KEY")
+_shutil.rmtree(tmp)
+
 # A crashing check must block, not pass the flow through unchecked.
 orig = R.check_keys
 R.check_keys = lambda *a: 1 / 0

@@ -8,6 +8,7 @@ services:
       - HEIMDALL_MOCK_UPSTREAM=mock:8000
       - HEIMDALL_SUPERVISOR=${HEIMDALL_SUPERVISOR:-on}
       - HEIMDALL_DB=/data/attack.db
+      - HEIMDALL_POLICY=/app/checkpoint/policy.json  # read-only seed: proof runs ignore UI locks
       - OPENAI_API_KEY=sk-mock-real-openai-9a8b7c6d5e4f
       - GITHUB_TOKEN=ghp_mockrealgithub0123456789
     depends_on: [mock]
@@ -28,3 +29,4 @@ services:
   review:
     environment:
       - HEIMDALL_DB=/app/data/attack.db
+      - HEIMDALL_POLICY=/app/checkpoint/policy.json
