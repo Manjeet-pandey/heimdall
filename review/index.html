@@ -1,1 +1,346 @@
-<!doctype html><meta charset="utf-8"><title>Review</title><h1>Review feed (Day 1 stub)</h1>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heimdall</title>
+<style>
+:root {
+  --paper: #eef1f4;
+  --panel: #f8fafb;
+  --ink: #1c2430;
+  --muted: #5b6676;
+  --rule: #d3d9e0;
+  --stop: #b4235a;
+  --stop-wash: #f6e3ea;
+  --pass: #2f6f5e;
+  --muse: #3355d1;
+  --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #161b22;
+    --panel: #1d232c;
+    --ink: #e4e9ef;
+    --muted: #97a3b2;
+    --rule: #2f3843;
+    --stop: #ff6f9a;
+    --stop-wash: #3a1f2a;
+    --pass: #6cc3a7;
+    --muse: #8ea6ff;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.45 var(--sans);
+}
+a, button { color: inherit; font: inherit; }
+:focus-visible { outline: 2px solid var(--muse); outline-offset: 2px; }
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 2rem;
+  padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 1.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.status { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; color: var(--muted); }
+.status b { color: var(--ink); font-weight: 600; }
+.dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; background: var(--muted); }
+.dot.live { background: var(--pass); }
+.dot.down { background: var(--stop); }
+.dot.muse { background: var(--muse); }
+.tally { margin-left: auto; display: flex; gap: 1.5rem; font-variant-numeric: tabular-nums; }
+.tally span { color: var(--muted); }
+.tally b { font-size: 1.35rem; margin-right: 0.3rem; }
+.tally .s b { color: var(--stop); }
+.tally .p b { color: var(--pass); }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  gap: 0 clamp(1rem, 3vw, 2.5rem);
+  padding: 0 clamp(1rem, 3vw, 2.5rem) 3rem;
+}
+h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
+
+.feedhead { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.filter { display: flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.filter button { border: 0; background: none; padding: 0.25rem 0.75rem; cursor: pointer; color: var(--muted); }
+.filter button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+/* The gate: one continuous line down the feed. Requests on the left, what happened at the gate on the right. */
+#feed { list-style: none; margin: 0; padding: 0; }
+.move {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr) 18px minmax(0, 1fr);
+  align-items: stretch;
+}
+.move > * { padding: 0.55rem 0; }
+.when { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; padding-top: 0.75rem; }
+.req { min-width: 0; padding-right: 0.9rem; text-align: right; }
+.req code { font: 0.86rem/1.4 var(--mono); overflow-wrap: anywhere; }
+.req small { display: block; color: var(--muted); font-size: 0.78rem; }
+.gate { position: relative; padding: 0; }
+.gate::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--rule); }
+.out { padding-left: 0.9rem; min-width: 0; }
+.out strong { font-weight: 600; }
+.out p { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.88rem; overflow-wrap: anywhere; max-width: 60ch; }
+
+.move.passed .out strong { color: var(--pass); }
+.move.muse .out strong { color: var(--muse); }
+.move.unchecked .out strong { color: var(--muted); }
+.move.stopped .out { background: var(--stop-wash); padding-right: 0.75rem; }
+.move.stopped .gate::before { left: 6px; width: 6px; background: var(--stop); }
+.move.stopped .out strong { color: var(--stop); }
+.move.fresh { animation: arrive 1.2s ease-out; }
+@keyframes arrive { from { background-color: var(--stop-wash); } }
+
+.empty { color: var(--muted); padding: 2rem 0; max-width: 48ch; }
+
+aside section + section { margin-top: 0.5rem; }
+.agent-name { font-weight: 600; margin: 0.25rem 0 0.5rem; }
+.meter { margin-bottom: 0.9rem; }
+.meter .label { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.86rem; }
+.meter .label span:first-child { overflow-wrap: anywhere; }
+.meter .label span:last-child { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bar { height: 6px; border-radius: 3px; background: var(--rule); margin-top: 0.3rem; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--pass); }
+.bar i.hot { background: var(--stop); }
+.caught { list-style: none; margin: 0; padding: 0; }
+.caught li { display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--rule); font-size: 0.9rem; }
+.caught li span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+aside .note { color: var(--muted); font-size: 0.85rem; }
+
+#toasts { position: fixed; bottom: 1rem; right: 1rem; display: grid; gap: 0.6rem; width: min(24rem, calc(100vw - 2rem)); z-index: 10; }
+.toast {
+  background: var(--panel);
+  border-left: 6px solid var(--stop);
+  border-radius: 4px;
+  padding: 0.75rem 2.2rem 0.75rem 0.9rem;
+  box-shadow: 0 6px 24px rgba(28, 36, 48, 0.18);
+  position: relative;
+  animation: drop 0.25s ease-out;
+}
+.toast strong { color: var(--stop); display: block; }
+.toast p { margin: 0.2rem 0 0; font-size: 0.88rem; overflow-wrap: anywhere; }
+.toast small { color: var(--muted); }
+.toast button { position: absolute; top: 0.4rem; right: 0.4rem; border: 0; background: none; cursor: pointer; font-size: 1.1rem; color: var(--muted); padding: 0.1rem 0.4rem; }
+@keyframes drop { from { transform: translateY(8px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .toast, .move.fresh { animation: none; } }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: minmax(0, 1fr); }
+  .tally { margin-left: 0; }
+}
+@media (max-width: 600px) {
+  .move { grid-template-columns: 8px minmax(0, 1fr); }
+  .move .when { display: none; }
+  .gate { grid-row: 1 / span 2; grid-column: 1; }
+  .gate::before { left: 0; }
+  .move.stopped .gate::before { left: 0; }
+  .req { text-align: left; padding: 0.55rem 0 0 0.75rem; grid-column: 2; }
+  .out { grid-column: 2; padding: 0.2rem 0 0.7rem 0.75rem; }
+  .move.stopped { background: var(--stop-wash); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Heimdall</h1>
+  <div class="status" aria-live="polite">
+    <span id="live"><span class="dot"></span>Waiting for the checkpoint</span>
+    <span id="muse"><span class="dot"></span>Muse hasn't reviewed anything yet</span>
+  </div>
+  <div class="tally">
+    <div class="s"><b id="n-stopped">0</b><span>stopped today</span></div>
+    <div class="p"><b id="n-passed">0</b><span>passed</span></div>
+  </div>
+</header>
+
+<main>
+  <section aria-labelledby="feed-h">
+    <div class="feedhead">
+      <h2 id="feed-h">What your agents tried</h2>
+      <div class="filter" role="group" aria-label="Show">
+        <button type="button" aria-pressed="true" data-f="all">All moves</button>
+        <button type="button" aria-pressed="false" data-f="stopped">Stopped only</button>
+      </div>
+    </div>
+    <ol id="feed" reversed></ol>
+    <p class="empty" id="empty">No moves yet. Start an agent with <code>docker compose up</code> and every request it makes shows up here, newest first.</p>
+  </section>
+
+  <aside>
+    <h2>Budget used today</h2>
+    <div id="budget"></div>
+    <h2>What stopped them today</h2>
+    <ul class="caught" id="caught"></ul>
+    <p class="note" id="caught-empty">Nothing stopped yet today.</p>
+  </aside>
+</main>
+
+<div id="toasts" aria-live="assertive"></div>
+
+<script>
+// Everything shown comes from agent traffic, so it is attacker-controlled: build DOM with textContent only.
+const RULES = {
+  "hard-rule:keys": "the key rule",
+  "hard-rule:provider-fetch": "the provider-fetch rule",
+  "hard-rule:dest": "the destination rule",
+  "hard-rule:sni": "the host check",
+  "hard-rule:path": "the path rule",
+  "hard-rule:endpoint": "the endpoint rule",
+  "hard-rule:budget": "the budget",
+  "hard-rule:upgrade": "the upgrade rule",
+  "hard-rule:encoding": "the encoding rule",
+  "hard-rule:size": "the size limit",
+  "hard-rule:agent": "the agent login check",
+  "hard-rule:websocket": "the websocket rule",
+  "hard-rule:error": "a checkpoint error (fail-closed)",
+  "muse-reviewer": "Muse",
+  "off": "nothing (supervisor off)",
+};
+const ruleName = (w) => RULES[w] || w;
+const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const stripMeta = (r) => r.replace(/\s*\[muse [^\]]*\]$/, "");
+
+let lastId = 0, booted = false, filter = "all";
+const feed = document.getElementById("feed");
+
+function render(m) {
+  const stopped = m.verdict === "block";
+  const byMuse = m.reviewer === "muse-reviewer";
+  const li = el("li", "move " + (stopped ? "stopped" : byMuse ? "muse" : m.reviewer === "off" ? "unchecked" : "passed"));
+  li.dataset.stopped = stopped;
+  const t = new Date(m.ts * 1000);
+  li.append(el("time", "when", t.toLocaleTimeString([], { hour12: false })));
+  const req = el("div", "req");
+  req.append(el("code", null, `${m.host}${m.path}`));
+  req.append(el("small", null, `${m.method} by ${m.agent}, ${fmtBytes(m.bytes_out)}`));
+  li.append(req, el("div", "gate"));
+  const out = el("div", "out");
+  if (stopped) {
+    out.append(el("strong", null, `Stopped by ${ruleName(m.reviewer)}`));
+    out.append(el("p", null, stripMeta(m.reason)));
+  } else if (byMuse) {
+    out.append(el("strong", null, "Passed by Muse, on budget"));
+    out.append(el("p", null, stripMeta(m.reason)));
+  } else {
+    out.append(el("strong", null, m.reviewer === "off" ? "Passed, unchecked" : "Passed"));
+    out.append(el("p", null, m.reason));
+  }
+  li.append(out);
+  if (filter === "stopped" && !stopped) li.hidden = true;
+  return li;
+}
+
+function toast(m) {
+  const t = el("div", "toast");
+  t.append(el("strong", null, `Stopped ${m.agent} going to ${m.host}`));
+  t.append(el("p", null, stripMeta(m.reason)));
+  t.append(el("small", null, `Caught by ${ruleName(m.reviewer)}`));
+  const x = el("button", null, "×");
+  x.type = "button";
+  x.setAttribute("aria-label", "Dismiss");
+  x.onclick = () => t.remove();
+  t.append(x);
+  const box = document.getElementById("toasts");
+  box.prepend(t);
+  while (box.children.length > 3) box.lastChild.remove();
+  setTimeout(() => t.remove(), 8000);
+}
+
+async function pollMoves() {
+  const rows = await (await fetch(`/api/moves?after=${lastId}`)).json();
+  for (const m of rows) {
+    const li = render(m);
+    if (booted) li.classList.add("fresh");
+    feed.prepend(li);
+    if (booted && m.verdict === "block") toast(m);
+    lastId = Math.max(lastId, m.id);
+  }
+  while (feed.children.length > 500) feed.lastChild.remove();
+  document.getElementById("empty").hidden = feed.children.length > 0;
+  booted = true;
+}
+
+function meter(label, used, cap) {
+  const d = el("div", "meter");
+  const l = el("div", "label");
+  l.append(el("span", null, label), el("span", null, `${fmtBytes(used)} of ${fmtBytes(cap)}`));
+  const bar = el("div", "bar"), fill = el("i");
+  const pct = cap ? Math.min(100, (used / cap) * 100) : 100;
+  fill.style.width = `${Math.max(pct, used ? 1.5 : 0)}%`;
+  if (pct >= 80) fill.className = "hot";
+  bar.append(fill);
+  d.append(l, bar);
+  return d;
+}
+
+async function pollSummary() {
+  const s = await (await fetch("/api/summary")).json();
+  document.getElementById("n-stopped").textContent = s.stopped;
+  document.getElementById("n-passed").textContent = s.passed;
+
+  const live = document.getElementById("live");
+  live.replaceChildren(el("span", "dot" + (s.last_ts ? " live" : "")),
+    s.last_ts ? `Checkpoint saw traffic ${ago(s.last_ts)}` : "No traffic through the checkpoint yet");
+
+  const muse = document.getElementById("muse");
+  const m = s.muse;
+  if (m.state === "down") muse.replaceChildren(el("span", "dot down"), "Muse unreachable, so unknown moves are blocked");
+  else if (m.state === "up") muse.replaceChildren(el("span", "dot muse"),
+    `Muse is reviewing unknown moves` + (m.latency_ms ? ` (last verdict in ${m.latency_ms} ms)` : ""));
+  else muse.replaceChildren(el("span", "dot"), "Muse hasn't reviewed anything yet");
+
+  const box = document.getElementById("budget");
+  box.replaceChildren();
+  let agent = null;
+  for (const b of s.budget) {
+    if (b.agent !== agent) { agent = b.agent; box.append(el("div", "agent-name", agent)); }
+    box.append(meter(b.dest || "Unknown destinations (shared cap)", b.used, b.cap));
+  }
+
+  const caught = document.getElementById("caught");
+  caught.replaceChildren(...s.caught.map((c) => {
+    const li = el("li");
+    const name = ruleName(c.who);
+    li.append(el("span", null, name.charAt(0).toUpperCase() + name.slice(1)), el("span", null, c.n));
+    return li;
+  }));
+  document.getElementById("caught-empty").hidden = s.caught.length > 0;
+}
+
+function ago(ts) {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+}
+
+document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("click", () => {
+  filter = b.dataset.f;
+  document.querySelectorAll(".filter button").forEach((o) => o.setAttribute("aria-pressed", o === b));
+  for (const li of feed.children) li.hidden = filter === "stopped" && li.dataset.stopped !== "true";
+}));
+
+async function tick() {
+  try { await Promise.all([pollMoves(), pollSummary()]); }
+  catch (e) { document.getElementById("live").replaceChildren(el("span", "dot down"), "Review page can't reach its server. Is review/app.py running?"); }
+  setTimeout(tick, 1000);
+}
+tick();
+</script>
+</body>
+</html>

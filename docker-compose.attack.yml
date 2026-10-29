@@ -25,3 +25,6 @@ services:
   coder:
     volumes:
       - ./attacks:/attacks:ro
+  review:
+    environment:
+      - HEIMDALL_DB=/app/data/attack.db

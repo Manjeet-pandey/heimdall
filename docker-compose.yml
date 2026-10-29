@@ -59,3 +59,18 @@ services:
     depends_on:
       checkpoint:
         condition: service_healthy
+  review:
+    image: python:3.12-slim
+    command: python /app/review/app.py
+    user: "10000:10000"
+    read_only: true
+    working_dir: /app
+    volumes:
+      - ./review:/app/review:ro
+      - ./checkpoint/policy.json:/app/checkpoint/policy.json:ro
+      - ./data:/app/data:ro
+    environment:
+      - HEIMDALL_DB=/app/data/checkpoint.db
+      - REVIEW_BIND=0.0.0.0
+    ports:
+      - "127.0.0.1:8000:8000"  # review page, localhost only
