@@ -23,7 +23,7 @@ db = connect(app.DB)
 esc = escalate(db, "coder", "GET", "docs.example.org", "/q", "sha1", "unclear purpose")
 now = time.time()
 for path, b in [("/simple/requests/", 300), ("/simple/flask/", 280), ("/upload/12", 900)]:
-    log(db, "coder", "GET" if "simple" in path else "POST", "pypi.org", path, b, "learn", "learning run", "learn-mode")
+    log(db, "coder", "GET" if "simple" in path else "POST", "pypi.org", path, "", "", "", b, "learn", "learning run", "learn-mode")
 
 srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
 port = srv.server_address[1]
@@ -49,7 +49,7 @@ def check(name, got, want):
 
 
 # Live view never shows proof-baseline (supervisor off) traffic.
-log(db, "coder", "POST", "ci-diagnostics.test", "/c", 100, "allow", "supervisor off (proof baseline)", "off")
+log(db, "coder", "POST", "ci-diagnostics.test", "/c", "", "", "", 100, "allow", "supervisor off (proof baseline)", "off")
 check("live-hides-baseline", [m["reviewer"] for m in app.moves(0) if m["reviewer"] == "off"], [])
 check("summary-agents", app.summary()["agents"]["coder"]["allow_hosts"], ["api.github.com", "api.openai.com"])
 
@@ -80,7 +80,7 @@ check("waiting-after", app.escalations()["waiting"], [])
 # Learn -> lock: moves grouped into suggested rules; lock validates and writes the live policy.
 check("start-learning", post("/api/learn/start", {"agent": "coder"})[0], 200)
 time.sleep(0.01)
-log(db, "coder", "GET", "pypi.org", "/simple/numpy/", 310, "learn", "learning run", "learn-mode")
+log(db, "coder", "GET", "pypi.org", "/simple/numpy/", "", "", "", 310, "learn", "learning run", "learn-mode")
 moves = app.learned()["coder"]["moves"]
 check("only-since-learn-start", [(m["method"], m["path_re"]) for m in moves], [("GET", r"/simple/numpy/")])
 check("path-regex", app.path_regex("/repos/me/proj/issues/12/comments"), r"/repos/me/proj/issues/\d+/comments")
@@ -99,7 +99,7 @@ check("runner-off-in-test", post("/api/run", {"job": "proof"})[0], 400)
 # Test source: reads the attack test's log, decisions go to its own file.
 tdb = connect(app.TEST_DB)
 tesc = escalate(tdb, "coder", "POST", "ci-diagnostics.test", "/c", "sha2", "unclear")
-log(tdb, "coder", "POST", "ci-diagnostics.test", "/c", 200, "block", "escalate: unclear", "muse-reviewer")
+log(tdb, "coder", "POST", "ci-diagnostics.test", "/c", "", "", "", 200, "block", "escalate: unclear", "muse-reviewer")
 check("test-src-moves", [m["host"] for m in app.moves(0, app.source("test"))], ["ci-diagnostics.test"])
 check("test-src-summary", app.summary(app.source("test"))["stopped"], 1)
 check("test-src-decide", post("/api/decide", {"id": tesc, "decision": "allow", "src": "test"})[0], 200)

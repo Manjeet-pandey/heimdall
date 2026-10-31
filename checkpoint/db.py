@@ -7,7 +7,8 @@ import time
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS moves(
   id INTEGER PRIMARY KEY, ts REAL, agent TEXT, method TEXT, host TEXT,
-  path TEXT, bytes_out INTEGER, verdict TEXT, reason TEXT, reviewer TEXT
+  path TEXT, query TEXT DEFAULT '', body TEXT DEFAULT '', headers TEXT DEFAULT '',
+  bytes_out INTEGER, verdict TEXT, reason TEXT, reviewer TEXT
 );
 -- Moves Muse (or strict mode) escalated to the human. req_sha pins the exact request: an approval
 -- lets that request through once, not anything else sent to the same path.
@@ -21,6 +22,17 @@ CREATE TABLE IF NOT EXISTS escalations(
 def connect(path: str = "checkpoint.db") -> sqlite3.Connection:
     c = sqlite3.connect(path)
     c.executescript(SCHEMA)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(moves)")}
+    for col in ("query", "body", "headers"):  # older logs predate these: widen in place, default empty
+        if col not in cols:
+            try:
+                c.execute(f"ALTER TABLE moves ADD COLUMN {col} TEXT DEFAULT ''")
+            except sqlite3.OperationalError as e:
+                # Read-only checkout (bad perms): run without the new columns instead of refusing to start.
+                # The review page falls back to the old column set; fix perms and restart to get full logging.
+                print(f"heimdall: cannot migrate {path} ({e}); continuing without {col}", flush=True)
+                break
+    c.commit()
     return c
 
 
@@ -30,14 +42,18 @@ def log(
     method: str,
     host: str,
     path: str,
+    query: str,
+    body: str,
+    headers: str,
     bytes_out: int,
     verdict: str,
     reason: str,
     reviewer: str,
 ) -> None:
     c.execute(
-        "INSERT INTO moves(ts,agent,method,host,path,bytes_out,verdict,reason,reviewer) VALUES(?,?,?,?,?,?,?,?,?)",
-        (time.time(), agent, method, host, path, bytes_out, verdict, reason, reviewer),
+        "INSERT INTO moves(ts,agent,method,host,path,query,body,headers,bytes_out,verdict,reason,reviewer)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (time.time(), agent, method, host, path, query, body, headers, bytes_out, verdict, reason, reviewer),
     )
     c.commit()
 

@@ -125,5 +125,9 @@ class Admin(Upstream):
 
 
 if __name__ == "__main__":
-    threading.Thread(target=ThreadingHTTPServer(("0.0.0.0", 8001), Admin).serve_forever, daemon=True).start()
-    ThreadingHTTPServer(("0.0.0.0", 8000), Upstream).serve_forever()
+    import os
+    upstream_port = int(os.environ.get("MOCK_UPSTREAM_PORT", "8000"))
+    admin_port = int(os.environ.get("MOCK_ADMIN_PORT", "8001"))
+    threading.Thread(target=ThreadingHTTPServer(("0.0.0.0", admin_port), Admin).serve_forever,
+                     daemon=True).start()
+    ThreadingHTTPServer(("0.0.0.0", upstream_port), Upstream).serve_forever()

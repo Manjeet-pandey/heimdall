@@ -28,13 +28,34 @@ POLICY = os.environ.get("HEIMDALL_POLICY", str(ROOT / "data/policy.json"))
 POLICY_SEED = ROOT / "checkpoint/policy.json"
 PROOF = ROOT / "proof/out"
 PAGE = Path(__file__).with_name("index.html")
-COLS = "id, ts, agent, method, host, path, bytes_out, verdict, reason, reviewer"
+COLS = "id, ts, agent, method, host, path, query, body, headers, bytes_out, verdict, reason, reviewer"
+COLS_OLD = "id, ts, agent, method, host, path, bytes_out, verdict, reason, reviewer"
+_SCHEMA: dict = {}  # db path -> (mtime, cols): old logs predate query/body; read them without those
+
+
+def _cols(db: str) -> str:
+    try:
+        mt = os.path.getmtime(db)
+    except OSError:
+        return COLS_OLD
+    if _SCHEMA.get(db, (None,))[0] != mt:
+        try:
+            c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+            names = {r[1] for r in c.execute("PRAGMA table_info(moves)")}
+            c.close()
+        except sqlite3.OperationalError:
+            names = set()
+        _SCHEMA[db] = (mt, COLS if {"query", "body", "headers"} <= names else COLS_OLD)
+    return _SCHEMA[db][1]
 PORT = int(os.environ.get("REVIEW_PORT", "8000"))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}  # Host header check: DNS rebinding can't reach the API
+# Extra names you open the page by, e.g. REVIEW_HOSTS=myhost:8000 behind a reverse proxy. Exact host:port only.
+ALLOWED_HOSTS |= {h.strip() for h in os.environ.get("REVIEW_HOSTS", "").split(",") if h.strip()}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "*"}
-# Run buttons: fixed commands only, never anything from the request. Need docker -> host only.
-RUNNER = shutil.which("docker") is not None and os.environ.get("REVIEW_RUNNER", "1") != "0"
+# Run buttons: fixed commands only, never anything from the request. Need a container engine -> host only.
+RUNNER = (shutil.which("docker") or shutil.which("podman")) is not None and os.environ.get("REVIEW_RUNNER", "1") != "0"
 JOBS = {
+    "attack": lambda runs: [sys.executable, "proof/run.py", "--attack"],
     "proof": lambda runs: [sys.executable, "proof/run.py", "--runs", str(runs)],
     "checks": lambda runs: ["./demo/demo.sh", "--check"],
 }
@@ -85,9 +106,16 @@ def decisions_file(db: str) -> str:
 
 
 def moves(after: int, db: str = DB) -> list[dict]:
+    cols = _cols(db)
     if after:
-        return query(f"select {COLS} from moves where id > ? and {LIVE} order by id limit 300", (after,), db)
-    return query(f"select {COLS} from moves where {LIVE} order by id desc limit 300", path=db)[::-1]
+        rows = query(f"select {cols} from moves where id > ? and {LIVE} order by id limit 300", (after,), db)
+    else:
+        rows = query(f"select {cols} from moves where {LIVE} order by id desc limit 300", path=db)[::-1]
+    for r in rows:
+        r.setdefault("query", "")
+        r.setdefault("body", "")
+        r.setdefault("headers", "")
+    return rows
 
 
 def summary(db: str = DB) -> dict:
@@ -247,25 +275,41 @@ def run_status() -> dict:
 
 def run(body: dict) -> dict:
     if not RUNNER:
-        raise ValueError("Run buttons need docker: start the review page on your machine with python3 review/app.py")
+        raise ValueError("Run buttons need docker or podman: start the review page on your machine with python3 review/app.py")
     if RUN["proc"] is not None and RUN["proc"].poll() is None:
         raise ValueError(f"{RUN['job']} is already running")
     job = body["job"]
-    if job not in JOBS:
-        raise ValueError(f"unknown job {job}")
-    runs = int(body.get("runs", 1))
-    if not 1 <= runs <= 10:
-        raise ValueError("runs must be 1-10")
+    if job == "redteam":
+        # Live stream: paced attack laps until stopped (Stop button -> SIGTERM -> stack put back).
+        pace = float(body.get("pace", 20))
+        if not 5 <= pace <= 300:
+            raise ValueError("pace must be 5-300 seconds")
+        cmd = [sys.executable, "proof/run.py", "--stream", "--pace", str(pace)]
+    else:
+        if job not in JOBS:
+            raise ValueError(f"unknown job {job}")
+        runs = int(body.get("runs", 1))
+        if not 1 <= runs <= 10:
+            raise ValueError("runs must be 1-10")
+        cmd = JOBS[job](runs)
     PROOF.mkdir(parents=True, exist_ok=True)
     log = open(RUN["log"], "w")
     RUN.update(job=job, started=time.time(),
-               proc=subprocess.Popen(JOBS[job](runs), cwd=ROOT, stdout=log, stderr=subprocess.STDOUT))
+               proc=subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT))
+    return {"ok": True}
+
+
+def stop(body: dict) -> dict:
+    proc = RUN["proc"]
+    if proc is not None and proc.poll() is None:
+        proc.terminate()  # proof/run.py traps SIGTERM and puts the stack back before exiting
     return {"ok": True}
 
 
 GETS = {"/api/summary": summary, "/api/escalations": escalations, "/api/learn": lambda db: learned(),
         "/api/proof": lambda db: proof(), "/api/run": lambda db: run_status()}
-POSTS = {"/api/decide": decide, "/api/learn/start": start_learning, "/api/lock": lock, "/api/run": run}
+POSTS = {"/api/decide": decide, "/api/learn/start": start_learning, "/api/lock": lock, "/api/run": run,
+         "/api/stop": stop}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -308,6 +352,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")  # the page and the feed must never be served stale
         # Feed shows attacker-controlled text: page renders it with textContent, and CSP keeps the page same-origin.
         self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; connect-src 'self'")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -320,5 +365,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     bind = os.environ.get("REVIEW_BIND", "127.0.0.1")
-    print(f"review page on http://127.0.0.1:{PORT} (run buttons {'on' if RUNNER else 'off: no docker here'})", flush=True)
+    print(f"review page on http://127.0.0.1:{PORT} (run buttons {'on' if RUNNER else 'off: no container engine here'})", flush=True)
     ThreadingHTTPServer((bind, PORT), Handler).serve_forever()

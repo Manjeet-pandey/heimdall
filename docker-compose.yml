@@ -80,7 +80,7 @@ services:
     environment:
       - HF_HOME=/hf
       - HF_HUB_OFFLINE=1
-      - PROMPTGUARD_MODEL=${PROMPTGUARD_MODEL:-meta-llama/Llama-Prompt-Guard-2-86M}
+      - PROMPTGUARD_MODEL=meta-llama/Llama-Prompt-Guard-2-86M
     networks:
       - egress  # checkpoint only; agents can't probe it to tune injections
   review:
@@ -100,4 +100,4 @@ services:
       - REVIEW_BIND=0.0.0.0
       - REVIEW_RUNNER=0  # no docker in here; run `python3 review/app.py` on the host for the Run buttons
     ports:
-      - "127.0.0.1:8000:8000"  # review page, localhost only
+      - "127.0.0.1:8000:8000"  # review page, localhost only: it has Allow/Lock buttons and no login

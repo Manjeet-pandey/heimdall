@@ -50,11 +50,14 @@ def _agent(flow) -> str | None:
 
 
 def _log(flow, agent, nbytes, verdict, reason, who):
-    # Query strings dropped and everything redacted: a foreign key in a blocked request must not land in the log.
+    # Query strings and bodies are stored redacted: a foreign key in a blocked request must not land in the log.
     r = flow.request
     path = quote_redacted(r.path.split("?", 1)[0], 512)
-    host = flow.metadata.get("heimdall_host", r.host)  # mock mode rewrites r.host before response()
-    log(DB, agent or "?", r.method, quote_redacted(host, 253), path, nbytes, verdict, quote_redacted(reason, 512), who)
+    query = quote_redacted(r.path.split("?", 1)[1] if "?" in r.path else "", 1024)
+    body = quote_redacted((r.raw_content or b"").decode("utf-8", "replace"), 2048)
+    headers = quote_redacted("\n".join(f"{k}: {v}" for k, v in r.headers.items(multi=True)), 2048)
+    host = quote_redacted(flow.metadata.get("heimdall_host", r.host), 253)  # mock mode rewrites r.host before response()
+    log(DB, agent or "?", r.method, host, path, query, body, headers, nbytes, verdict, quote_redacted(reason, 512), who)
 
 
 def _block(flow, agent, nbytes, reason, who):
@@ -173,8 +176,8 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
         return _block(flow, agent, nbytes, reason, "hard-rule:budget")
     if who == "human":
         mark_used(DB, esc)  # one approval, one request: consumed only once it actually goes out
+    _log(flow, agent, nbytes, verdict, why, who)  # before the swap: the log keeps headers, so it must only ever see placeholders
     swap_placeholders(agent, host, req.headers)
-    _log(flow, agent, nbytes, verdict, why, who)
 
 
 async def server_connect(data) -> None:

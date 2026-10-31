@@ -19,17 +19,61 @@ import uuid
 sys.path.insert(0, ".")
 from attacks.mock_server import MOCK_KEYS, REAL_KEYS, canary
 
-COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.attack.yml"]
+def _compose() -> list[str]:
+    if shutil.which("docker"):
+        base = ["docker", "compose"]
+    elif shutil.which("podman"):
+        base = ["podman", "compose"]  # podman-compose provides the subcommand
+    else:
+        raise SystemExit("need docker or podman compose on PATH")
+    return base + ["-f", "docker-compose.yml", "-f", "docker-compose.attack.yml"]
+
+
+COMPOSE = _compose()
+PLAIN = COMPOSE[:2]  # the normal stack, without the attack overlay
 ADMIN = "http://127.0.0.1:18001"
 # Muse Spark list price (Standard tier) as published by third-party listings; check your Meta bill.
 MUSE_USD_PER_M_IN, MUSE_USD_PER_M_OUT = 1.25, 4.25
 AGENT_KEYS = {"off": MOCK_KEYS, "full": {"OPENAI_API_KEY": "gw_ph_openai_x7f3", "GITHUB_TOKEN": "gw_ph_github_k2p9"}}
 
 
+def wait_http(url: str, timeout: int = 120) -> None:
+    """Rootless port forwarding completes the TCP handshake before the process inside listens,
+    so an open port proves nothing: wait for a real HTTP response instead. Any status counts —
+    the proxy port answers 400 to non-proxy requests, the mock admin 200, a blocked probe 403.
+    Plain-IP URLs only: no DNS is involved at any step."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=5):
+                return
+        except urllib.error.HTTPError:
+            return
+        except Exception as e:
+            last = e
+            time.sleep(1)
+    raise SystemExit(f"timed out waiting for {url}: {last}")
+
+
+def wait_exec(timeout: int = 120) -> None:
+    """The agent runs via `exec` in the coder box; make sure the box takes execs before laps start."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = subprocess.run(COMPOSE + ["exec", "-T", "coder", "true"], capture_output=True)
+        if r.returncode == 0:
+            return
+        time.sleep(1)
+    raise SystemExit("timed out waiting for the coder box")
+
+
 def up(cond: str) -> None:
     env = {**os.environ, "HEIMDALL_SUPERVISOR": cond}
-    subprocess.run(COMPOSE + ["up", "-d", "--wait", "--force-recreate", "guard", "checkpoint", "mock", "coder"],
+    subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "guard", "checkpoint", "mock", "coder"],
                    env=env, check=True, capture_output=True)
+    wait_http("http://127.0.0.1:18001/")  # mock admin answers 200
+    wait_http("http://127.0.0.1:8080/")   # proxy port answers (400 to non-proxy requests)
+    wait_exec()
 
 
 RUNS_DIR = "data/attack-runs"  # one archived checkpoint log per run, for the summary
@@ -43,8 +87,9 @@ def fresh_checkpoint(cond: str) -> None:
     for f in ("data/attack.db", "data/attack.decisions.db"):
         if os.path.exists(f):
             os.remove(f)
-    subprocess.run(COMPOSE + ["up", "-d", "--wait", "--force-recreate", "--no-deps", "checkpoint"],
+    subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "--no-deps", "checkpoint"],
                    env=env, check=True, capture_output=True)
+    wait_http("http://127.0.0.1:8080/")
 
 
 def archive(name: str) -> None:
@@ -71,9 +116,21 @@ def run_once(cond: str, run_id: str) -> tuple[list[dict], bool]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=1)
+    ap.add_argument("--stream", action="store_true",
+                    help="loop the attack forever (paced laps) until stopped; for watching Heimdall work live")
+    ap.add_argument("--attack", action="store_true",
+                    help="one live attack through the full supervisor only: fresh log, no unprotected baseline")
+    ap.add_argument("--pace", type=float, default=20, help="seconds between stream laps")
     args = ap.parse_args()
+    if args.stream:
+        stream(args.pace)
+        return
+    if args.attack:
+        attack()
+        return
     # If your normal stack is up, the test borrows it and puts it back afterwards.
-    was_up = bool(subprocess.run(["docker", "compose", "ps", "-q", "checkpoint"], capture_output=True, text=True).stdout.strip())
+    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
+    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
     # Fresh log per proof run: strict mode persists for the day, so a stale flag would skew this run.
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
     shutil.rmtree(RUNS_DIR, ignore_errors=True)
@@ -93,17 +150,78 @@ def main() -> None:
         subprocess.run(COMPOSE + ["down"], capture_output=True)
         if was_up:
             print("restarting your normal stack", file=sys.stderr)
-            subprocess.run(["docker", "compose", "up", "-d"], check=True, capture_output=True)
+            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
 
     os.makedirs("proof/out", exist_ok=True)
     with open("proof/out/moves.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["cond", "run", "attack", "variant", "status", "by", "leaked", "reason"])
+        w = csv.DictWriter(f, fieldnames=["cond", "run", "attack", "variant", "status", "by", "leaked", "reason"],
+                           extrasaction="ignore")  # +r1 lines carry provenance (adaptive/source/model)
         w.writeheader()
         w.writerows(moves)
     summary = summarize(moves, key_leaks, args.runs)
     with open("proof/out/summary.json", "w") as f:
         json.dump(summary, f, indent=1)
     report(summary)
+
+
+def attack() -> None:
+    """One live attack through the full supervisor: fresh log, no unprotected baseline.
+    For watching — the feed and piles start empty and fill as it happens."""
+    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
+    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    try:
+        up("full")
+        fresh_checkpoint("full")  # clean log: this attack owns attack.db from here on
+        ms, key_leak = run_once("full", f"attack-{uuid.uuid4().hex[:6]}")
+        task = all(200 <= m["status"] < 300 for m in ms if m["attack"] == "task")
+        print(f"live attack: {sum(m['leaked'] for m in ms)} leaked, "
+              f"task {'done' if task else 'broken'}, key reached attacker: {key_leak}", file=sys.stderr)
+    finally:
+        # Even if the attack crashes: never leave the stack in attack mode, and give back what was running.
+        subprocess.run(COMPOSE + ["down"], capture_output=True)
+        if was_up:
+            print("restarting your normal stack", file=sys.stderr)
+            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+
+
+def stream(pace: float) -> None:
+    """Live red-team stream: the full supervisor stays up and the attacker laps forever
+    (fresh canaries per lap, so every lap shows as a new incident) until SIGTERM/SIGINT,
+    then the normal stack is put back, same as the proof runner."""
+    import signal
+    stop = False
+
+    def _halt(signum, frame):
+        nonlocal stop
+        stop = True
+        print("stream stopping after this lap", file=sys.stderr)
+
+    signal.signal(signal.SIGTERM, _halt)
+    signal.signal(signal.SIGINT, _halt)
+    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
+    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
+    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    try:
+        up("full")
+        fresh_checkpoint("full")  # clean feed: this stream owns attack.db from here on
+        n = 0
+        while not stop:
+            n += 1
+            env = sum((["-e", f"{k}={v}"] for k, v in
+                       {**AGENT_KEYS["full"], "RUN_ID": f"stream-{n}"}.items()), [])
+            r = subprocess.run(COMPOSE + ["exec", "-T", *env, "coder", "python", "/attacks/agent.py"],
+                               capture_output=True, text=True)
+            blocked = sum(1 for line in r.stdout.splitlines()
+                          if line.startswith("{") and '"status": 403' in line)
+            print(f"stream lap {n}: {blocked} blocked", file=sys.stderr, flush=True)
+            deadline = time.time() + pace
+            while not stop and time.time() < deadline:
+                time.sleep(0.5)
+    finally:
+        subprocess.run(COMPOSE + ["down"], capture_output=True)
+        if was_up:
+            print("restarting your normal stack", file=sys.stderr)
+            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
 
 
 def summarize(moves: list[dict], key_leaks, n_runs: int) -> dict:
