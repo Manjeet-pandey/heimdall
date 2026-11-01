@@ -82,6 +82,15 @@ def main() -> None:
     ap.add_argument("--attack-pct", type=float, default=1)
     ap.add_argument("--workers", type=int, default=64)
     a = ap.parse_args()
+    # GPU PromptGuard (reviewer/guard.py run natively on the Mac, ~6x the container's CPU throughput): use it when up.
+    if "HEIMDALL_GUARD_URL" not in os.environ:
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8002/", timeout=2)
+            os.environ["HEIMDALL_GUARD_URL"] = "http://host.docker.internal:8002"
+        except OSError:
+            pass
+    guard = os.environ.get("HEIMDALL_GUARD_URL", "http://guard:8002")
+    print(f"PromptGuard: {guard}", file=sys.stderr)
     was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
     try:
@@ -96,7 +105,7 @@ def main() -> None:
                            capture_output=True, text=True, timeout=a.seconds * 5 + 120)
         secs = time.time() - t0
         seen = "\n".join(x["text"] for x in json.load(urllib.request.urlopen(ADMIN)) if x["visible"])
-        out = {"target_rps": a.rate, "seconds": a.seconds, "attack_pct": a.attack_pct, **score(p.stdout.splitlines(), seen, secs),
+        out = {"target_rps": a.rate, "seconds": a.seconds, "attack_pct": a.attack_pct, "guard": guard, **score(p.stdout.splitlines(), seen, secs),
                "muse": muse_stats(t0), "finished": time.time()}
         if p.returncode:
             out["generator_error"] = p.stderr[-500:]

@@ -29,7 +29,9 @@ if "--download" in sys.argv:
 
 torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
 TOK = AutoTokenizer.from_pretrained(MODEL)
-NET = AutoModelForSequenceClassification.from_pretrained(MODEL).eval()
+# Apple GPU (MPS) when run natively on a Mac: ~10x the CPU throughput. Containers on a Mac only get the CPU.
+DEVICE = os.environ.get("GUARD_DEVICE") or ("mps" if torch.backends.mps.is_available() else "cpu")
+NET = AutoModelForSequenceClassification.from_pretrained(MODEL).eval().to(DEVICE)
 # Dynamic batching: one forward pass costs ~110 ms whether it holds 1 chunk or 16 (CPU, fixed overhead),
 # so chunks from requests arriving within WAIT_S share a batch. One batcher thread owns the model.
 PENDING: queue.Queue = queue.Queue()
@@ -45,7 +47,7 @@ def batcher() -> None:
             except queue.Empty:
                 break
         try:
-            batch = TOK.pad({"input_ids": [ids for ids, _ in items]}, return_tensors="pt")
+            batch = {k: v.to(DEVICE) for k, v in TOK.pad({"input_ids": [ids for ids, _ in items]}, return_tensors="pt").items()}
             with torch.no_grad():
                 probs = torch.softmax(NET(**batch).logits, dim=-1)[:, 1].tolist()  # label 1 = malicious
         except Exception:
@@ -100,4 +102,5 @@ if __name__ == "__main__":
         print("selftest OK")
         sys.exit(0)
     ThreadingHTTPServer.request_queue_size = 256  # default 5: bursts of scans got connection resets
-    ThreadingHTTPServer(("0.0.0.0", 8002), Handler).serve_forever()
+    # In a container: all interfaces (the checkpoint reaches it by name). On the host: GUARD_BIND=127.0.0.1.
+    ThreadingHTTPServer((os.environ.get("GUARD_BIND", "0.0.0.0"), 8002), Handler).serve_forever()
