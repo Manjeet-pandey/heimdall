@@ -49,6 +49,10 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    # Own core + CPU cap: slows CPU-timing side channels to other agents. Next agent gets a different core.
+    # ponytail: narrows the channel, doesn't close it; separate VMs per agent do (roadmap).
+    cpuset: "${CODER_CPUSET:-0}"
+    cpus: 1
     volumes:
       - ./agent-work/coder:/work:rw
       - ./notes:/notes:ro

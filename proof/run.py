@@ -32,6 +32,9 @@ def _compose() -> list[str]:
 COMPOSE = _compose()
 PLAIN = COMPOSE[:2]  # the normal stack, without the attack overlay
 ADMIN = "http://127.0.0.1:18001"
+OUT = os.environ.get("PROOF_OUT", "proof/out")  # live run: proof/out-live, so it never overwrites the mock results
+# Live run: the attacker host's admin port, read over the LAN (never through the public tunnel).
+ADMINS = [ADMIN] + [a for a in [os.environ.get("HEIMDALL_ATTACKER_ADMIN")] if a]
 # Muse Spark list price (Standard tier) as published by third-party listings; check your Meta bill.
 MUSE_USD_PER_M_IN, MUSE_USD_PER_M_OUT = 1.25, 4.25
 AGENT_KEYS = {"off": MOCK_KEYS, "full": {"OPENAI_API_KEY": "gw_ph_openai_x7f3", "GITHUB_TOKEN": "gw_ph_github_k2p9"}}
@@ -101,11 +104,12 @@ def archive(name: str) -> None:
 
 
 def run_once(cond: str, run_id: str) -> tuple[list[dict], bool]:
-    urllib.request.urlopen(urllib.request.Request(ADMIN + "/reset", method="POST"))
+    for a in ADMINS:
+        urllib.request.urlopen(urllib.request.Request(a + "/reset", method="POST"))
     env = sum((["-e", f"{k}={v}"] for k, v in {**AGENT_KEYS[cond], "RUN_ID": run_id}.items()), [])
     out = subprocess.run(COMPOSE + ["exec", "-T", *env, "coder", "python", "/attacks/agent.py"],
                          capture_output=True, text=True, check=True).stdout
-    seen = "\n".join(r["text"] for r in json.load(urllib.request.urlopen(ADMIN)) if r["visible"])
+    seen = "\n".join(r["text"] for a in ADMINS for r in json.load(urllib.request.urlopen(a)) if r["visible"])
     moves = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
     for m in moves:
         m.update(cond=cond, run=run_id,
@@ -152,14 +156,14 @@ def main() -> None:
             print("restarting your normal stack", file=sys.stderr)
             subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
 
-    os.makedirs("proof/out", exist_ok=True)
-    with open("proof/out/moves.csv", "w", newline="") as f:
+    os.makedirs(OUT, exist_ok=True)
+    with open(f"{OUT}/moves.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["cond", "run", "attack", "variant", "status", "by", "leaked", "reason"],
                            extrasaction="ignore")  # +r1 lines carry provenance (adaptive/source/model)
         w.writeheader()
         w.writerows(moves)
     summary = summarize(moves, key_leaks, args.runs)
-    with open("proof/out/summary.json", "w") as f:
+    with open(f"{OUT}/summary.json", "w") as f:
         json.dump(summary, f, indent=1)
     report(summary)
 

@@ -6,6 +6,7 @@ services:
   checkpoint:
     environment:
       - HEIMDALL_MOCK_UPSTREAM=mock:8000
+      - HEIMDALL_REAL_HOSTS=${HEIMDALL_REAL_HOSTS:-}  # live attacker host you own: goes out for real
       - HEIMDALL_SUPERVISOR=${HEIMDALL_SUPERVISOR:-on}
       - HEIMDALL_DB=/data/attack.db
       - HEIMDALL_POLICY=/app/checkpoint/policy.json  # read-only seed: proof runs ignore UI locks
@@ -15,6 +16,8 @@ services:
   mock:
     image: python:3.12-slim
     command: python /attacks/mock_server.py
+    environment:
+      - HEIMDALL_ATTACKER_URL=${HEIMDALL_ATTACKER_URL:-https://ci-diagnostics.test/c}
     user: "10000:10000"
     read_only: true
     volumes:

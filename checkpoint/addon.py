@@ -31,6 +31,8 @@ DB = connect(DB_PATH)
 DECISIONS = os.path.splitext(DB_PATH)[0] + ".decisions.db"
 # Attack/proof runs: every upstream connection goes to the mock server, never the internet.
 MOCK = os.environ.get("HEIMDALL_MOCK_UPSTREAM")  # "mock:8000"
+# Attack mode only: hosts that skip the mock and go out for real (public DNS, real TLS), e.g. a server you own behind a tunnel.
+REAL_HOSTS = {h.strip().lower() for h in os.environ.get("HEIMDALL_REAL_HOSTS", "").split(",") if h.strip()}
 # Proof baseline ("no supervisor"): forward everything unchecked. Refuses to run outside mock mode.
 SUPERVISOR_OFF = os.environ.get("HEIMDALL_SUPERVISOR") == "off"
 if SUPERVISOR_OFF and not MOCK:
@@ -85,7 +87,7 @@ async def request(flow: http.HTTPFlow) -> None:
             await _decide(flow, agent)
         except Exception as e:
             _block(flow, agent, 0, f"checkpoint error, fail-closed: {type(e).__name__}", "hard-rule:error")
-    if MOCK and flow.response is None:
+    if MOCK and flow.response is None and flow.request.host.lower() not in REAL_HOSTS:
         # ponytail: plain HTTP/1 to the mock; an HTTP/2 agent would need h2c here.
         host_header = flow.request.host_header  # the mock routes on it; .host setter would overwrite it
         h, port = MOCK.rsplit(":", 1)
@@ -220,7 +222,7 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
 
 async def server_connect(data) -> None:
     """Resolve once, refuse non-global IPs, pin the IP we checked (no DNS-rebinding window). SNI stays the hostname."""
-    if MOCK:  # hard guarantee: in mock mode nothing connects anywhere but the mock
+    if MOCK and data.server.address[0].lower() not in REAL_HOSTS:  # in mock mode only listed hosts leave
         h, port = MOCK.rsplit(":", 1)
         data.server.address = (h, int(port))
         return

@@ -69,6 +69,9 @@ reading why it was blocked. Each run happens with and without Heimdall.
 
 *(1 run each way so far; the 5-run proof is scheduled before submission.)*
 
+**Live attacker host** (`proof/out-live/`): the same test with the attacker's server on the real internet (a server we own
+behind a Cloudflare tunnel, real DNS and TLS). Same result: 3 of 3 out without Heimdall, 0 of 3 with it.
+
 **Rogue agent** (`proof/rogue.py`): Llama 3.1 8B is told to get a database password out and adapts after every
 403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, a new issue, the
 attacker's server and unknown sites. With the final setup **0 of 3 runs got the secret out** (31 of 38 requests
@@ -115,7 +118,12 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
   server (by design). The rogue agent is the model-driven adaptive attacker.
 - **Throughput is bounded by PromptGuard.** About 80 scans/s on CPU in a container, about 600/s natively on an
   Apple GPU. Containers on a Mac can't use the GPU, so the fast path runs PromptGuard on the host.
-- All test traffic is synthetic and every test uses a mock internet.
+- **Same-machine side channels aren't watched.** Heimdall only sees the network. Two agents on one machine
+  could signal through CPU timing or cache use, and a less-restricted agent could then send what it learned out
+  through its own allowed routes (still inside its byte budgets). Each agent gets its own CPU core and a CPU cap,
+  which slows this down but doesn't stop it; separate VMs per agent would.
+- All test traffic is synthetic. GitHub and the LLM provider are mocked; in the live run the attacker's host is a
+  real public server we own behind a Cloudflare tunnel, and it only ever receives fake keys.
 
 ## Run it
 
@@ -169,7 +177,7 @@ start.sh      everything, one command
 
 Not built, on purpose: Go agent images; OAuth, cookie and AWS-signature credentials; logging file reads inside
 the sandbox; bubblewrap instead of Docker for lighter sandboxes; phone alerts for decisions; drafting a policy
-from one line of plain English.
+from one line of plain English; one VM per agent to close same-machine side channels.
 
 ## Muse Code log
 
