@@ -207,7 +207,12 @@ pre.log:empty { display: none; }
   </div>
   <span class="running" id="running" hidden></span>
   <button type="button" class="btn deny" id="stop" hidden>Stop</button>
-  <button type="button" class="btn primary" id="run">Run attack</button>
+  <select class="btn" id="run-job" aria-label="What to run">
+    <option value="attack">Attack test</option>
+    <option value="rogue">Rogue agent (Llama)</option>
+    <option value="load">Load test (100/s)</option>
+  </select>
+  <button type="button" class="btn primary" id="run">Run</button>
 </header>
 <div class="notice" id="notice" hidden></div>
 
@@ -220,6 +225,10 @@ pre.log:empty { display: none; }
       <div class="box"><h2>Latest blocked <button type="button" class="linkish" id="h-to-live">Watch live</button></h2><ol id="h-stop"></ol></div>
     </div>
     <div class="box"><h2>Attack test score <button type="button" class="linkish" id="open-results">See every attack</button></h2><div id="h-score"></div></div>
+    <div class="two" style="margin-top:1rem">
+      <div class="box"><h2>Rogue agent</h2><div id="h-rogue"></div></div>
+      <div class="box"><h2>Under load</h2><div id="h-load"></div></div>
+    </div>
   </div>
 </section>
 <section class="page" id="rules-view" hidden><div class="wrap" id="rules-body"></div></section>
@@ -433,6 +442,24 @@ function renderHome(piles) {
   $("h-wait-n").textContent = wait || "";
   $("h-wait").replaceChildren(...(wait ? newest(piles.wait, 8).map(askRow) : [el("li", "empty", "Nothing is waiting for you.")]));
   $("h-stop").replaceChildren(...(piles.stop.length ? newest(piles.stop, 8).map((m) => li(card(m))) : [el("li", "empty", "Nothing blocked.")]));
+  const stat = (cls, big, label) => { const d = el("div"); d.append(el("span", `big ${cls}`, big), el("small", null, label)); return d; };
+  const row = (...xs) => { const b = el("div", "score"); b.append(...xs); return b; };
+  const rg = PROOF?.rogue, ld = PROOF?.load;
+  $("h-rogue").replaceChildren(rg ? row(
+      stat(rg.leaked ? "s" : "p", `${rg.leaked} of ${rg.runs}`, `runs got the secret out (${rg.model}, adapting to every block)`),
+      stat("", `${rg.blocked} of ${rg.requests}`, "of its requests blocked"))
+    : el("p", "empty", "Not run yet. Choose Rogue agent next to Run (needs llama-server)."));
+  if (!ld) $("h-load").replaceChildren(el("p", "empty", "Not run yet. Choose Load test next to Run."));
+  else {
+    const a = Object.entries(ld.attacks).filter(([k]) => !k.startsWith("slow"));
+    const sent = a.reduce((n, [, v]) => n + (v.sent || 0), 0), out = a.reduce((n, [, v]) => n + (v.leaked || 0), 0);
+    const slow = ld.attacks["slow-leak (4 pieces)"] || {};
+    $("h-load").replaceChildren(row(
+      stat("", `${ld.achieved_rps}/s`, `sustained, ${ld.requests} requests`),
+      stat(out ? "s" : "p", `${sent - out} of ${sent}`, "attacks blocked"),
+      stat(ld.normal_wrongly_blocked ? "s" : "p", `${ld.normal_wrongly_blocked} of ${ld.normal}`, "normal requests wrongly blocked"),
+      stat(slow.leaked ? "s" : "p", slow.leaked ? "got out" : "stopped", "slow leak (one secret split over 4 comments)")));
+  }
   const sc = $("h-score"), p = PROOF?.summary;
   if (!p) { sc.replaceChildren(el("p", "empty", "No full proof run yet. Open it to run one.")); return; }
   const sum = (c) => Object.values(p.attacks).reduce((n, a) => n + a[c].hit, 0), total = Object.values(p.attacks).reduce((n, a) => n + a.full.runs, 0);
@@ -653,7 +680,7 @@ $("run").onclick = async () => {
     return;
   }
   try {
-    await post("/api/run", { job: "attack" });
+    await post("/api/run", { job: $("run-job").value, runs: 1 });
     notice(null);
     if (src !== "test") setSrc("test");
     else { all = []; lastId = 0; booted = true; landed.clear(); queue.length = 0; render(); }
@@ -670,7 +697,7 @@ async function pollRun() {
   $("running").hidden = !on;
   if (on) {
     const secs = Math.round(Date.now() / 1000 - r.started);
-    $("running").textContent = `${r.job === "proof" ? "Full proof" : r.job === "redteam" ? "Attack loop" : "Attack"} running · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    $("running").textContent = `${({ proof: "Full proof", redteam: "Attack loop", rogue: "Rogue agent", load: "Load test" })[r.job] || "Attack"} running · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
   }
   const log = $("run-log");
   if (log) log.textContent = r.log.join("\n");

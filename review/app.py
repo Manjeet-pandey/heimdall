@@ -57,6 +57,8 @@ RUNNER = (shutil.which("docker") or shutil.which("podman")) is not None and os.e
 JOBS = {
     "attack": lambda runs: [sys.executable, "proof/run.py", "--attack"],
     "proof": lambda runs: [sys.executable, "proof/run.py", "--runs", str(runs)],
+    "rogue": lambda runs: [sys.executable, "proof/rogue.py", "--runs", str(runs)],  # needs llama-server running
+    "load": lambda runs: [sys.executable, "proof/load.py", "--rate", "100", "--seconds", "60"],
     "checks": lambda runs: ["./demo/demo.sh", "--check"],
 }
 RUN = {"job": None, "proc": None, "started": None, "log": PROOF / "run.log"}
@@ -262,7 +264,9 @@ def lock(body: dict) -> dict:
 
 def proof() -> dict:
     f = PROOF / "summary.json"
-    return {"summary": json.loads(f.read_text()) if f.exists() else None, "runner": RUNNER}
+    extra = {k: json.loads((PROOF / f"{k}.json").read_text()) if (PROOF / f"{k}.json").exists() else None
+             for k in ("load", "rogue")}
+    return {"summary": json.loads(f.read_text()) if f.exists() else None, "runner": RUNNER, **extra}
 
 
 def run_status() -> dict:

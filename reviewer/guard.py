@@ -6,8 +6,10 @@ Self-check: python /app/guard.py --selftest"""
 
 import json
 import os
+import queue
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import torch
@@ -16,7 +18,8 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 MODEL = os.environ.get("PROMPTGUARD_MODEL", "meta-llama/Llama-Prompt-Guard-2-86M")
 CHUNK = 510
 MAX_CHUNKS = 256  # ~130k tokens; longer than that is reported as 1.0 (fail-closed: can't vouch for the rest)
-BATCH = 16
+BATCH = 32
+WAIT_S = 0.005  # how long the batcher waits for more chunks before running a batch
 
 if "--download" in sys.argv:
     AutoTokenizer.from_pretrained(MODEL)
@@ -27,7 +30,32 @@ if "--download" in sys.argv:
 torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
 TOK = AutoTokenizer.from_pretrained(MODEL)
 NET = AutoModelForSequenceClassification.from_pretrained(MODEL).eval()
-LOCK = threading.Lock()  # one inference at a time; torch already uses the cores
+# Dynamic batching: one forward pass costs ~110 ms whether it holds 1 chunk or 16 (CPU, fixed overhead),
+# so chunks from requests arriving within WAIT_S share a batch. One batcher thread owns the model.
+PENDING: queue.Queue = queue.Queue()
+
+
+def batcher() -> None:
+    while True:
+        items = [PENDING.get()]
+        until = time.monotonic() + WAIT_S
+        while len(items) < BATCH:
+            try:
+                items.append(PENDING.get(timeout=max(0.0, until - time.monotonic())))
+            except queue.Empty:
+                break
+        try:
+            batch = TOK.pad({"input_ids": [ids for ids, _ in items]}, return_tensors="pt")
+            with torch.no_grad():
+                probs = torch.softmax(NET(**batch).logits, dim=-1)[:, 1].tolist()  # label 1 = malicious
+        except Exception:
+            probs = [1.0] * len(items)  # fail closed: a scan that broke counts as an attack
+        for (_, slot), p in zip(items, probs):
+            slot["p"] = p
+            slot["done"].set()
+
+
+threading.Thread(target=batcher, daemon=True).start()
 
 
 def score(text: str) -> float:
@@ -35,16 +63,13 @@ def score(text: str) -> float:
     chunks = [ids[i:i + CHUNK] for i in range(0, len(ids), CHUNK)] or [[]]
     if len(chunks) > MAX_CHUNKS:
         return 1.0
-    worst = 0.0
-    for i in range(0, len(chunks), BATCH):
-        batch = TOK.pad(
-            {"input_ids": [TOK.build_inputs_with_special_tokens(c) for c in chunks[i:i + BATCH]]},
-            return_tensors="pt",
-        )
-        with LOCK, torch.no_grad():
-            probs = torch.softmax(NET(**batch).logits, dim=-1)[:, 1]  # label 1 = malicious
-        worst = max(worst, float(probs.max()))
-    return worst
+    slots = [{"p": 1.0, "done": threading.Event()} for _ in chunks]
+    for c, slot in zip(chunks, slots):
+        PENDING.put((TOK.build_inputs_with_special_tokens(c), slot))
+    for slot in slots:
+        if not slot["done"].wait(60):
+            return 1.0  # fail closed on a stuck batcher
+    return max(slot["p"] for slot in slots)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -74,4 +99,5 @@ if __name__ == "__main__":
         assert benign < 0.5 < attack and padded > 0.5, "PromptGuard self-check failed"
         print("selftest OK")
         sys.exit(0)
+    ThreadingHTTPServer.request_queue_size = 256  # default 5: bursts of scans got connection resets
     ThreadingHTTPServer(("0.0.0.0", 8002), Handler).serve_forever()

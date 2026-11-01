@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mitmproxy import ctx, http
@@ -66,6 +67,12 @@ def _block(flow, agent, nbytes, reason, who):
         403, f"heimdall [{who}]: {quote_redacted(reason, 512)}\n".encode(), {"Content-Type": "text/plain"}
     )
     _log(flow, agent, nbytes, "block", reason, who)
+
+
+def running() -> None:
+    # Muse (1-3 s) and PromptGuard calls run in worker threads. The default pool (~16) starves under load:
+    # a few slow Muse calls would hold every thread and stall response scanning for everyone.
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64))
 
 
 async def request(flow: http.HTTPFlow) -> None:
@@ -227,8 +234,10 @@ async def response(flow: http.HTTPFlow) -> None:
 
 
 def responseheaders(flow: http.HTTPFlow) -> None:
-    # ponytail: non-LLM responses are buffered but not yet scanned; PromptGuard 2 hooks in here (Fri).
-    if flow.request.host.lower() in R.LLM_HOSTS.get(_agent(flow), set()):
+    # LLM responses stream (SSE); everything else is buffered for PromptGuard in response().
+    # The original host: mock mode has already rewritten flow.request.host to the mock by now.
+    host = flow.metadata.get("heimdall_host", flow.request.host).lower()
+    if host in R.LLM_HOSTS.get(_agent(flow), set()):
         flow.response.stream = True
 
 

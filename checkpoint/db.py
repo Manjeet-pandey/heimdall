@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS escalations(
 
 
 def connect(path: str = "checkpoint.db") -> sqlite3.Connection:
-    c = sqlite3.connect(path)
+    # No WAL: data/ is a host folder shared into containers, where WAL's shared-memory file is unsafe
+    # (the checkpoint died with SIGBUS under load). Rollback journal + a wait on locks instead (~1.6 ms/commit).
+    c = sqlite3.connect(path, timeout=10)
+    c.execute("PRAGMA journal_mode=DELETE")  # also converts a DB left in WAL mode by an earlier run
     c.executescript(SCHEMA)
     cols = {r[1] for r in c.execute("PRAGMA table_info(moves)")}
     for col in ("query", "body", "headers"):  # older logs predate these: widen in place, default empty
