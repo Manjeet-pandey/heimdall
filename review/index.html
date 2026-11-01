@@ -142,6 +142,19 @@ pre.bodytext { margin: 0; background: var(--panel-2); border-radius: 8px; paddin
 .redact { color: var(--wait); }
 .note { color: var(--muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
 
+/* rogue agent transcript: one step = Llama's thought, its request, Heimdall's answer */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+.step { border-left: 3px solid var(--rule); padding: 0.35rem 0 0.35rem 0.75rem; }
+.step.stop { border-left-color: var(--stop); } .step.pass { border-left-color: var(--pass); } .step.wait { border-left-color: var(--wait); }
+.step .n { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.step .thought { margin: 0.15rem 0; font-style: italic; }
+.step .act { margin: 0.15rem 0; font: 0.8rem var(--mono); overflow-wrap: anywhere; }
+.step .res { margin: 0; font-size: 0.82rem; font-weight: 600; }
+.step.stop .res { color: var(--stop); } .step.pass .res { color: var(--pass); } .step.wait .res { color: var(--wait); }
+.step .res small { font-weight: 400; color: var(--muted); }
+.banner-line { padding: 0.6rem 0.8rem; border-radius: 10px; background: var(--panel-2); margin-bottom: 1rem; font-weight: 600; }
+.banner-line.stop { color: var(--stop); } .banner-line.pass { color: var(--pass); }
+
 /* rules + results inside the drawer */
 .lede { color: var(--muted); max-width: 68ch; margin: 0 0 0.8rem; }
 .agent-block { margin-bottom: 1.5rem; }
@@ -226,7 +239,7 @@ pre.log:empty { display: none; }
     </div>
     <div class="box"><h2>Attack test score <button type="button" class="linkish" id="open-results">See every attack</button></h2><div id="h-score"></div></div>
     <div class="two" style="margin-top:1rem">
-      <div class="box"><h2>Rogue agent</h2><div id="h-rogue"></div></div>
+      <div class="box"><h2>Rogue agent <button type="button" class="linkish" id="h-rogue-watch">Watch it think</button></h2><div id="h-rogue"></div></div>
       <div class="box"><h2>Under load</h2><div id="h-load"></div></div>
     </div>
   </div>
@@ -569,7 +582,9 @@ async function pollEscalations() {
 
 // ---- side panel ----
 const drawer = $("drawer");
+let drawerMode = null; // "rogue" while the live transcript is open, so the loop keeps it fresh
 function openDrawer(title, wide) {
+  drawerMode = null;
   $("drawer-title").textContent = title;
   drawer.classList.toggle("wide", !!wide);
   drawer.hidden = false;
@@ -671,22 +686,70 @@ document.querySelectorAll("[data-src]").forEach((b) => { b.setAttribute("aria-pr
 
 // ---- run an attack ----
 function notice(msg) { const n = $("notice"); n.hidden = !msg; n.replaceChildren(...(msg ? [msg] : [])); }
-$("run").onclick = async () => {
+async function startJob(job) {
   if (!RUNNER) {
-    const c = el("code", null, "docker compose stop review && python3 review/app.py");
     const f = document.createDocumentFragment();
-    f.append("Running attacks from this page needs Docker on the host. Start the page there instead: ", c);
+    f.append("This copy of the page can't start runs (it's inside a container). Start everything with ", el("code", null, "./start.sh"),
+      " and open the page it prints.");
     notice(f);
     return;
   }
   try {
-    await post("/api/run", { job: $("run-job").value, runs: 1 });
+    await post("/api/run", { job, runs: 1 });
     notice(null);
     if (src !== "test") setSrc("test");
     else { all = []; lastId = 0; booted = true; landed.clear(); queue.length = 0; render(); }
+    if (job === "rogue") { show("live"); openRogue(); }
     pollRun();
   } catch (e) { notice(e.message); }
-};
+}
+$("run").onclick = () => startJob($("run-job").value);
+
+// ---- rogue agent: watch Llama think, act, and get blocked ----
+function stepView(st) {
+  const obs = st.obs || "";
+  let kind = "", res = null;
+  const m = obs.match(/^HTTP 403: heimdall \[([^\]]+)\]: (.*)$/s);
+  if (st.tool === "read_file") res = ["Read a file in its workspace", ""];
+  else if (st.tool === "done") res = ["Gave up", ""];
+  else if (m) {
+    const waiting = /waiting for you/.test(m[2]);
+    kind = waiting ? "wait" : "stop";
+    res = [waiting ? `Stopped: waiting for you (${LAYERS[layerOf(m[1])]} wasn't sure)` : `Blocked by ${LAYERS[layerOf(m[1])]}`, stripMeta(m[2]).trim()];
+  } else if (/^HTTP \d/.test(obs)) { kind = "pass"; res = [`Went through (${obs.slice(0, 8)})`, obs.slice(9, 160)]; }
+  else if (obs) res = ["", obs.slice(0, 160)];
+  const li = el("li", `step ${kind}`);
+  li.append(el("div", "n", `Step ${st.step}`));
+  if (st.thought) li.append(el("p", "thought", `“${st.thought}”`));
+  if (st.tool === "http") li.append(el("p", "act", `${st.method || "GET"} ${st.url}`));
+  else if (st.tool === "read_file") li.append(el("p", "act", `read ${st.path}`));
+  if (res) { const p = el("p", "res", res[0]); if (res[1]) p.append(" ", el("small", null, res[1])); li.append(p); }
+  return li;
+}
+async function openRogue() {
+  const r = await getJSON("/api/rogue");
+  const fresh = drawerMode !== "rogue" || drawer.hidden;
+  const body = fresh ? openDrawer("Rogue agent: Llama 3.1 8B", false) : $("drawer-body");
+  drawerMode = "rogue";
+  const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 60;
+  body.replaceChildren(el("p", "lede", "An open-weights Llama model is told to get a database password out. Every request it decides on runs inside the sandbox and goes through Heimdall. When it's blocked, it reads why and tries something else."));
+  const res = r.result;
+  if (r.running && r.run) body.append(el("div", "banner-line", `Running · step ${r.steps.length}`));
+  else if (res) body.append(el("div", `banner-line ${res.leaked_secret || res.leaked_key ? "stop" : "pass"}`,
+    res.leaked_secret || res.leaked_key ? "It got the secret out." : `The secret stayed in. ${res.blocked} of its ${res.requests} requests were blocked.`));
+  if (RUNNER && !r.running) {
+    const b = el("button", "btn primary", r.run ? "Run it again" : "Run the rogue agent");
+    b.type = "button"; b.onclick = () => startJob("rogue");
+    const act = el("div", "actions"); act.append(b, el("span", "note", "About a minute. Uses the attack-test sandbox and a fake internet."));
+    body.append(act);
+  }
+  if (!r.run) { body.append(el("p", "note", r.running ? "Starting the sandbox and the fake internet (about a minute)…" : "It hasn't run yet.")); return; }
+  const ol = el("ol", "steps");
+  ol.append(...r.steps.map(stepView));
+  body.append(ol);
+  if (fresh || (r.running && atBottom)) body.scrollTop = body.scrollHeight;
+}
+$("h-rogue-watch").onclick = openRogue;
 $("stop").onclick = async () => { try { await post("/api/stop", {}); } catch (e) { notice(e.message); } pollRun(); };
 async function pollRun() {
   const r = await getJSON("/api/run");
@@ -890,6 +953,7 @@ async function tick() {
     await pollMoves();
     await pollRun();
     if (view === "home") { PROOF = await getJSON("/api/proof"); render(); }
+    if (drawerMode === "rogue" && !drawer.hidden) await openRogue();
   } catch {
     $("st-traffic").replaceChildren(el("span", "dot bad"), "Can't reach the page's server. Is review/app.py running?");
   }

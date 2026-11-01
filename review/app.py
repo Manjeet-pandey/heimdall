@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -277,6 +278,26 @@ def run_status() -> dict:
             "exit": proc.poll() if proc is not None else None, "log": log}
 
 
+LLAMA_HEALTH = os.environ.get("LLAMA_URL", "http://127.0.0.1:8089/v1/chat/completions").rsplit("/v1/", 1)[0] + "/health"
+
+
+def rogue_live() -> dict:
+    """The newest rogue-agent run, step by step (Llama's thought, its request, what came back), for the page."""
+    runs = sorted((PROOF / "rogue").glob("*.jsonl"), key=lambda f: f.stat().st_mtime) if (PROOF / "rogue").exists() else []
+    if not runs:
+        return {"run": None, "steps": [], "result": None}
+    running = RUN["job"] == "rogue" and RUN["proc"] is not None and RUN["proc"].poll() is None
+    f = runs[-1]
+    if running and f.stat().st_mtime < (RUN["started"] or 0):  # new run still starting its sandbox: don't show the last one
+        return {"run": None, "steps": [], "result": None, "running": True}
+    steps = [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
+    done = PROOF / "rogue.json"
+    result = None
+    if done.exists():
+        result = next((r for r in json.loads(done.read_text()).get("results", []) if r["run"] == f.stem), None)
+    return {"run": f.stem, "steps": steps, "result": result, "running": running}
+
+
 def run(body: dict) -> dict:
     if not RUNNER:
         raise ValueError("Run buttons need docker or podman: start the review page on your machine with python3 review/app.py")
@@ -290,6 +311,11 @@ def run(body: dict) -> dict:
             raise ValueError("pace must be 5-300 seconds")
         cmd = [sys.executable, "proof/run.py", "--stream", "--pace", str(pace)]
     else:
+        if job == "rogue":  # fail here with a clear message, not a minute later in the run log
+            try:
+                urllib.request.urlopen(LLAMA_HEALTH, timeout=2)
+            except OSError:
+                raise ValueError("The rogue agent needs Llama: run ./start.sh, or start llama-server on port 8089")
         if job not in JOBS:
             raise ValueError(f"unknown job {job}")
         runs = int(body.get("runs", 1))
@@ -311,7 +337,7 @@ def stop(body: dict) -> dict:
 
 
 GETS = {"/api/summary": summary, "/api/escalations": escalations, "/api/learn": lambda db: learned(),
-        "/api/proof": lambda db: proof(), "/api/run": lambda db: run_status()}
+        "/api/proof": lambda db: proof(), "/api/run": lambda db: run_status(), "/api/rogue": lambda db: rogue_live()}
 POSTS = {"/api/decide": decide, "/api/learn/start": start_learning, "/api/lock": lock, "/api/run": run,
          "/api/stop": stop}
 
