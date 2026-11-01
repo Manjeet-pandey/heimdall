@@ -75,12 +75,6 @@ def _block(flow, agent, nbytes, reason, who):
     _log(flow, agent, nbytes, "block", reason, who)
 
 
-def running() -> None:
-    # Muse (1-3 s) and PromptGuard calls run in worker threads. The default pool (~16) starves under load:
-    # a few slow Muse calls would hold every thread and stall response scanning for everyone.
-    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64))
-
-
 async def request(flow: http.HTTPFlow) -> None:
     agent = _agent(flow)
     flow.metadata["heimdall_host"] = flow.request.host
@@ -298,6 +292,9 @@ def websocket_message(flow: http.HTTPFlow) -> None:
 
 
 def running() -> None:
+    # Muse (1-3 s) calls run in worker threads. The default pool (~16) starves under load:
+    # a few slow Muse calls would hold every thread and stall everyone. (One running() only: a second def replaces the first.)
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64))
     # Publish only the public CA cert for agents; the CA private key stays in the checkpoint's confdir.
     out = os.environ.get("HEIMDALL_CA_OUT")
     if out:

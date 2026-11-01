@@ -48,6 +48,9 @@ h1 { margin: 0; font-size: 1.1rem; letter-spacing: -0.01em; }
 .btn.deny { border-color: var(--stop); color: var(--stop); font-weight: 600; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .running { color: var(--l-muse); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 0.5rem; z-index: 50; max-width: min(22rem, calc(100vw - 32px)); }
+.toast { background: var(--stop-wash); color: var(--ink); border-left: 4px solid var(--stop); padding: 0.6rem 0.8rem; border-radius: 4px; font-size: 0.85rem; box-shadow: 0 2px 8px #0003; }
+.toast b { color: var(--stop); display: block; }
 .notice { padding: 0.45rem 1rem; font-size: 0.85rem; color: var(--muted); border-bottom: 1px solid var(--rule); }
 
 /* ---- the live diagram: requests -> heimdall -> piles ---- */
@@ -228,6 +231,7 @@ pre.log:empty { display: none; }
   <button type="button" class="btn primary" id="run">Run</button>
 </header>
 <div class="notice" id="notice" hidden></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 
 <section class="page" id="home">
   <div class="wrap">
@@ -534,6 +538,13 @@ async function drain() {
   flying = false;
 }
 
+function toast(m) {
+  const t = el("div", "toast"), e = explain(m);
+  t.append(el("b", null, e.title), `${m.method} ${m.host}${m.path || ""}`.slice(0, 90));
+  $("toasts").append(t);
+  setTimeout(() => t.remove(), 6000);
+}
+
 // ---- polling ----
 const qs = () => `src=${src}`;
 async function pollMoves() {
@@ -545,7 +556,7 @@ async function pollMoves() {
   rows.forEach((m) => (lastId = Math.max(lastId, m.id)));
   all = all.concat(rows).slice(-500);
   if (!booted) rows.forEach((m) => landed.add(m.id)); // first load: everything is already in its pile
-  else queue.push(...rows);
+  else { queue.push(...rows); rows.filter((m) => m.verdict === "block").slice(-3).forEach(toast); }
   booted = true;
   render();
   drain();
