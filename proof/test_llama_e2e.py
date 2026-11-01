@@ -155,7 +155,7 @@ check("e2e-A2-retry-blocked",
       blocked(flow("api.openai.com", "/v1/chat/completions", headers=auth,
                    body=json.dumps(r2["body"]).encode())))
 
-# A3 seed (allowed comment write): Muse deny blocks; Muse down passes (known limit).
+# A3 seed (allowed comment write): Muse deny blocks; Muse down blocks too (Wonder mode fails closed on unreviewed writes).
 os.environ["META_MODEL_API_KEY"] = "test-not-real"
 _orig_post = muse._post
 muse._post = lambda payload, key: {"choices": [{"message": {"content":
@@ -164,8 +164,8 @@ comment = json.dumps({"body": "ci log " + canary(RUN, "issue-comment")}).encode(
 check("e2e-A3-seed-history-deny",
       blocked(flow("api.github.com", "/repos/me/proj/issues/1/comments", headers=gh_auth, body=comment)))
 muse._post = lambda payload, key: (_ for _ in ()).throw(TimeoutError())
-check("e2e-A3-seed-down-passes-is-limit",
-      not blocked(flow("api.github.com", "/repos/me/proj/issues/1/comments", headers=gh_auth, body=comment)))
+check("e2e-A3-seed-down-fails-closed",
+      blocked(flow("api.github.com", "/repos/me/proj/issues/1/comments", headers=gh_auth, body=comment)))
 muse._post = _orig_post
 os.environ.pop("META_MODEL_API_KEY", None)
 

@@ -248,5 +248,20 @@ rows = addon.DB.execute("select path, reason from moves").fetchall()
 if any("sk-" in str(r) and "sk-test" not in str(r) for r in rows):
     fails.append(f"log leak: {[r for r in rows if 'sk-' in str(r)]}")
 
+# Attack mode: everything connects to the mock, except hosts listed in HEIMDALL_REAL_HOSTS (the live run).
+from types import SimpleNamespace
+addon.MOCK, addon.REAL_HOSTS = "mock:8000", {"live.invalid"}
+f = flow("api.openai.com", "/v1/chat/completions", headers=auth)
+if (f.request.host, f.request.port, f.request.host_header) != ("mock", 8000, "api.openai.com"):
+    fails.append(f"mock rewrite: {f.request.host}:{f.request.port} host={f.request.host_header}")
+for host, want in [("api.openai.com", ("mock", 8000)), ("Live.invalid", None)]:
+    d = SimpleNamespace(server=SimpleNamespace(address=(host, 443), error=None))
+    asyncio.run(addon.server_connect(d))
+    if want and d.server.address != want:
+        fails.append(f"mock pin {host}: {d.server.address}")
+    if not want and (d.server.address[0] == "mock" or "fail-closed" not in (d.server.error or "")):
+        fails.append(f"real host {host} must take the real DNS path: {d.server}")  # .invalid never resolves
+addon.MOCK, addon.REAL_HOSTS = None, set()
+
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
 sys.exit(1 if fails else 0)

@@ -118,6 +118,8 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
   server (by design). The rogue agent is the model-driven adaptive attacker.
 - **Throughput is bounded by PromptGuard.** About 80 scans/s on CPU in a container, about 600/s natively on an
   Apple GPU. Containers on a Mac can't use the GPU, so the fast path runs PromptGuard on the host.
+- **Byte budgets live in memory.** Restarting the checkpoint resets today's counts, so an agent that can force
+  a restart gets a fresh budget. Every move is still logged to SQLite, so the bytes stay countable afterwards.
 - **Same-machine side channels aren't watched.** Heimdall only sees the network. Two agents on one machine
   could signal through CPU timing or cache use, and a less-restricted agent could then send what it learned out
   through its own allowed routes (still inside its byte budgets). Each agent gets its own CPU core and a CPU cap,

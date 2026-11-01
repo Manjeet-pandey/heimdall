@@ -19,6 +19,11 @@ if [ "${1:-}" = "--check" ]; then
   if python3 -c "import mitmproxy" 2>/dev/null; then
     python3 proof/test_addon.py >/dev/null && echo "check OK: full pipeline" || { echo "check FAIL: test_addon failed"; exit 1; }
     python3 proof/test_llama_e2e.py >/dev/null && echo "check OK: adaptive attacker e2e (mock + pipeline)" || { echo "check FAIL: test_llama_e2e failed"; exit 1; }
+  elif docker image inspect mitmproxy/mitmproxy:11 >/dev/null 2>&1; then
+    # No mitmproxy on the host (the Mac): run the pipeline tests in the checkpoint's own image.
+    run_mitm() { docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app --entrypoint python3 mitmproxy/mitmproxy:11 "$@" >/dev/null; }
+    run_mitm proof/test_addon.py && echo "check OK: full pipeline (in mitmproxy image)" || { echo "check FAIL: test_addon failed"; exit 1; }
+    run_mitm proof/test_llama_e2e.py && echo "check OK: adaptive attacker e2e (in mitmproxy image)" || { echo "check FAIL: test_llama_e2e failed"; exit 1; }
   else
     echo "check WARN: mitmproxy not installed, pipeline tests skipped (pip install 'mitmproxy>=11,<12' to run proof/test_addon.py proof/test_llama_e2e.py)"
   fi
