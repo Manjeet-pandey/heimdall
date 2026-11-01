@@ -18,7 +18,7 @@ agent sandbox ──► Heimdall checkpoint ────────────
 (no network,      1. Rules       hard checks no AI can override
  placeholder      2. Muse Spark  reviews anything new, and every write for slow leaks
  keys only)       3. PromptGuard scans every response for hidden instructions
-                  4. You         decide what Muse isn't sure about
+                  4. Muse Wonder settles what Spark isn't sure about (no human needed)
 ```
 
 - **Placeholder keys.** Agents hold `gw_ph_openai_x7f3`, never the real key. The checkpoint swaps in the real key
@@ -27,10 +27,14 @@ agent sandbox ──► Heimdall checkpoint ────────────
   metadata addresses, CONNECT host = SNI = Host, size caps on URL, headers and body, path rules for writes,
   no foreign API keys on LLM hosts, no provider-side fetches (MCP servers, web search, image URLs) to unknown
   hosts, a byte budget per agent per destination. WebSocket frames are counted and capped too.
-- **Muse Spark as reviewer.** Anything that matches no rule goes to Muse for a verdict (deny / escalate to you /
+- **Muse Spark as reviewer.** Anything that matches no rule goes to Muse for a verdict (deny / not sure /
   allow within a small budget). Writes to *allowed* endpoints get a history review: Muse sees the agent's task
-  and recent requests and looks for data leaking out a little at a time. Muse can only deny or escalate past a
-  hard rule, never allow. If the Meta API is down, the checkpoint fails closed: unknown requests are blocked.
+  and recent requests and looks for data leaking out a little at a time. Muse can never allow past a hard rule.
+- **Muse Wonder as the decider, so agents run 24/7.** When Spark isn't sure, or can't answer, Meta's larger
+  Muse Wonder makes the final allow-or-deny call on the spot; nobody has to be watching. If Wonder is unsure or
+  unreachable the answer is deny, and its allows still count against the byte budgets. Prefer a person in the
+  loop? `HEIMDALL_DECIDER=human` sends those requests to the review page's queue instead.
+- **Fail closed.** If the Meta API is down, unknown requests and unreviewed writes are blocked.
 - **PromptGuard 2** scans every non-LLM response before the agent sees it. A hit puts the agent in strict mode:
   nothing new goes out without your OK.
 - **Learn, then lock.** Watch an agent do its job, approve the moves it made, and lock it to exactly those.
@@ -43,10 +47,11 @@ agent sandbox ──► Heimdall checkpoint ────────────
 | Model | Role | Where |
 |---|---|---|
 | **Muse Spark** (Meta Model API, Standard tier: no training on our data) | Reviewer: single-request verdicts and history (slow-leak) review | `reviewer/muse.py` |
+| **Muse Wonder** (Meta Model API, Standard tier) | Decider: final allow/deny when Spark isn't sure or can't answer | `reviewer/muse.py` |
 | **Llama 3.1 8B Instruct** (open weights, llama.cpp) | Attacker: the rogue agent that adapts to every block | `proof/rogue.py` |
 | **Llama Prompt Guard 2 86M** | Scans responses for prompt injection, CPU or Apple GPU | `reviewer/guard.py` |
 
-Muse never plays the attacker, so the reviewer never grades itself. No outputs are used to train anything.
+Muse (Spark or Wonder) never plays the attacker, so the reviewers never grade themselves. No outputs are used to train anything.
 
 ## Results
 
@@ -65,34 +70,43 @@ reading why it was blocked. Each run happens with and without Heimdall.
 *(1 run each way so far; the 5-run proof is scheduled before submission.)*
 
 **Rogue agent** (`proof/rogue.py`): Llama 3.1 8B is told to get a database password out and adapts after every
-403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, the attacker's server and
-unknown sites. **0 of 4 runs got the secret out**; 40 of 52 of its requests were blocked (the rest were harmless
-reads and LLM calls).
+403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, a new issue, the
+attacker's server and unknown sites. With the final setup **0 of 3 runs got the secret out** (31 of 38 requests
+blocked; the rest were harmless reads and LLM calls).
+
+It also found a real hole along the way: when a Muse Spark call timed out, a write to an allowed endpoint went
+through unreviewed, and in 2 of 2 runs the agent got the password out in a progress comment. Unreviewed writes
+now go to Muse Wonder, and are denied if it can't answer either.
 
 **Load test** (`proof/load.py`): one minute of a busy agent at 100 requests/s (repo reads, LLM calls, progress
-comments) with 1% labelled attacks mixed in, real Muse reviewing.
+comments) with 1% labelled attacks mixed in, real Muse Spark and Muse Wonder deciding, PromptGuard on the Apple GPU.
 
-| | PromptGuard on CPU (container) | PromptGuard on Apple GPU |
-|---|---|---|
-| Sustained rate | 66.8 req/s | **93.2 req/s** |
-| LLM call, median / p95 | 504 / 788 ms | **7 / 236 ms** |
-| Repo read, median / p95 | 1,065 / 1,339 ms | **56 / 539 ms** |
-| Attacks blocked | 58 of 58 | **57 of 57** |
-| Normal requests wrongly blocked | 2 of 5,938 | 9 of 5,938 |
-| Slow leak (one secret split over 4 comments) | got out | got out |
+| | Result |
+|---|---|
+| Sustained rate | **95.1 req/s** |
+| LLM call, median / p95 | 7 / 15 ms |
+| Repo read, median / p95 (scanned by PromptGuard) | 56 / 76 ms |
+| Progress comment, median / p95 (reviewed by Muse) | 2.5 / 4.6 s |
+| Attacks blocked | **58 of 58** |
+| Normal requests wrongly blocked | 3 of 5,937 (comments Muse Wonder judged suspicious) |
+| Slow leak (one secret split over 4 comments) | got out |
 
-Muse: median ~2 s per verdict, about $0.0018 each; under load about $0.39 per minute (only writes and unknown
-destinations are reviewed, so reads and LLM calls cost nothing).
+Muse Spark: 206 reviews in the minute, median 2.4 s, about $0.39. Muse Wonder was needed 3 times. Reads and LLM
+calls are never sent to Muse. With PromptGuard on CPU in a container the same test sustains about 67 req/s.
 
 ## Limits (honest)
 
 - **A slow leak inside the caps gets through.** A secret split into small pieces across normal-looking comments
   on an allowed endpoint got out in the load test. It is counted and charted, not stopped.
-- **Muse sometimes escalates instead of denying.** The rogue agent URL-encoded the secret into an unknown site's
-  path; Muse wasn't sure and sent it to the human queue. It stays blocked until someone clicks *Allow once*, so a
-  careless approval would leak it.
-- **Muse gets stricter with volume.** At 180 progress comments a minute the history review starts blocking some
-  harmless ones as a leak pattern (9 of 5,938 in the load test).
+- **The decider is a model too.** Muse Wonder denied every leak the rogue agent sent its way, including a
+  secret URL-encoded into an unknown site's path, but both reviewers read attacker-controlled content and a
+  clever enough injection could fool both. Hard rules and byte budgets cap the damage either way.
+- **Muse gets stricter with volume.** At 180 progress comments a minute some harmless ones are judged a leak
+  pattern (3 of 5,937 in the load test).
+- **Muse Wonder is slow under load** (2 s alone, up to ~10 s when the API is busy), so writes Spark doubts take
+  longer. Its calls run apart from response scanning, so everything else keeps its speed.
+- **In human mode, writes keep flowing while Muse is down** (so agents aren't stuck); only Wonder mode, the
+  default, blocks them.
 - **The reviewer reads attacker-controlled content**, so it could be manipulated. That is why it can never
   override a hard rule, only add a deny or an escalation.
 - **A redacted copy of each reviewed request is sent to the Meta API.** Anything that looks like a key is removed
@@ -114,6 +128,8 @@ HF_TOKEN=... docker compose run --rm -e HF_TOKEN -e HF_HUB_OFFLINE=0 guard pytho
 brew install llama.cpp                     # optional: the rogue agent's model (downloads ~4.6 GB on first run)
 ./start.sh                                 # then open http://127.0.0.1:8000
 ```
+
+Set `HEIMDALL_DECIDER=human` before starting to have uncertain requests wait for you instead of Muse Wonder.
 
 `./start.sh` brings up the checkpoint, the sandbox, PromptGuard and Llama, and runs the review page on your
 machine so its **Run** menu works: *Attack test*, *Rogue agent* (with a live transcript of what it's thinking)

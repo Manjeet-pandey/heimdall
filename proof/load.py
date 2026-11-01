@@ -67,12 +67,17 @@ def score(lines: list[str], seen: str, secs: float) -> dict:
     }
 
 
-def muse_stats(since: float) -> dict:
+def muse_stats(since: float, tag: str = "muse") -> dict:
+    """Calls, latency and tokens for one model, from the markers the reviewer leaves in each logged reason
+    ("[muse ...]" = Muse Spark, "[wonder ...]" = Muse Wonder). Cost is Spark's list price; Wonder's isn't published to us."""
     rows = sqlite3.connect("data/attack.db").execute(
         "select reason from moves where reviewer like 'muse%' and ts >= ?", (since,)).fetchall()
-    calls = [tuple(map(int, m.groups())) for (r,) in rows if (m := re.search(r"\[muse (\d+)ms in=(\d+) out=(\d+)\]", r))]
-    usd = sum(i * MUSE_USD_PER_M_IN + o * MUSE_USD_PER_M_OUT for _, i, o in calls) / 1e6
-    return {"calls": len(calls), "median_ms": statistics.median([c[0] for c in calls]) if calls else None, "usd": round(usd, 4)}
+    calls = [tuple(map(int, m.groups())) for (r,) in rows for m in re.finditer(rf"\[{tag} (\d+)ms in=(\d+) out=(\d+)\]", r)]
+    out = {"calls": len(calls), "median_ms": statistics.median([c[0] for c in calls]) if calls else None,
+           "tokens_in": sum(c[1] for c in calls), "tokens_out": sum(c[2] for c in calls)}
+    if tag == "muse":
+        out["usd"] = round(sum(i * MUSE_USD_PER_M_IN + o * MUSE_USD_PER_M_OUT for _, i, o in calls) / 1e6, 4)
+    return out
 
 
 def main() -> None:
@@ -106,7 +111,7 @@ def main() -> None:
         secs = time.time() - t0
         seen = "\n".join(x["text"] for x in json.load(urllib.request.urlopen(ADMIN)) if x["visible"])
         out = {"target_rps": a.rate, "seconds": a.seconds, "attack_pct": a.attack_pct, "guard": guard, **score(p.stdout.splitlines(), seen, secs),
-               "muse": muse_stats(t0), "finished": time.time()}
+               "muse": muse_stats(t0), "wonder": muse_stats(t0, "wonder"), "finished": time.time()}
         if p.returncode:
             out["generator_error"] = p.stderr[-500:]
     finally:

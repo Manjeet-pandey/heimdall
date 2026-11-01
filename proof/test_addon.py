@@ -9,6 +9,7 @@ sys.path.insert(0, ".")
 os.environ["HEIMDALL_DB"] = ":memory:"
 os.environ["OPENAI_API_KEY"] = "sk-test-not-real-000000"
 os.environ.pop("META_MODEL_API_KEY", None)  # reviewer offline -> unknowns must fail closed
+os.environ["HEIMDALL_DECIDER"] = "human"  # the human-queue tests below; Muse Wonder mode is tested at the end
 
 from mitmproxy.test import tflow, tutils
 
@@ -64,7 +65,7 @@ expect("provider-fetch", flow("api.openai.com", "/v1/chat/completions", headers=
 # Muse allow never overrides a hard rule: unknown-dest cap still applies after an allow.
 from reviewer import muse
 os.environ["META_MODEL_API_KEY"] = "test-not-real"
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "allow-with-budget", "reason": "benign"}'}}], "usage": {}}
 R.ALLOWLIST["coder"]["unknown_day"] = 4096  # an agent WITH a new-site allowance: Muse allows, cap still bites
 expect("muse-allow-unknown", flow("docs.python.org", "/upload", body=b"A" * 1000), False)
@@ -73,29 +74,29 @@ expect("muse-allow-no-tripwire-override", flow("docs.python.org", "/upload", bod
 R.ALLOWLIST["coder"]["unknown_day"] = 0  # the shipped setting: Muse "harmless" on a new site goes to you instead
 expect("zero-cap-muse-allow-asks-you", flow("docs.python.org", "/q?d=4f3a9c0b1d2e", method="GET", body=b""), True,
        "new site needs you")
-muse._post = lambda payload, key: (_ for _ in ()).throw(TimeoutError())
+muse._post = lambda payload, key, *a: (_ for _ in ()).throw(TimeoutError())
 expect("muse-down-fails-closed", flow("docs.python.org", "/other", body=b"x"), True, "fail-closed")
 os.environ.pop("META_MODEL_API_KEY")
 
 # History review on allowed writes: Muse deny blocks; Muse down passes in normal mode, blocks in strict mode.
 comment = ("api.github.com", "/repos/me/proj/issues/1/comments")
 os.environ["META_MODEL_API_KEY"] = "test-not-real"
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "deny", "reason": "env dump in a comment"}'}}], "usage": {}}
 expect("history-deny", flow(*comment, body=b'{"body":"DATABASE_URL=..."}'), True, "muse-history")
 expect("llm-call-skips-history", flow("api.openai.com", "/v1/chat/completions", headers=auth), False)
-muse._post = lambda payload, key: (_ for _ in ()).throw(TimeoutError())
+muse._post = lambda payload, key, *a: (_ for _ in ()).throw(TimeoutError())
 expect("history-down-normal-passes", flow(*comment, body=b'{"body":"progress"}'), False)
 addon.STRICT.add("coder")
 expect("history-down-strict-blocks", flow(*comment, body=b'{"body":"progress"}'), True, "strict mode")
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "allow-with-budget", "reason": "benign"}'}}], "usage": {}}
 expect("strict-blocks-unknown-even-if-muse-allows", flow("docs.python.org", "/x", body=b"x"), True, "strict-mode")
 expect("strict-allows-reviewed-write", flow(*comment, body=b'{"body":"progress"}'), False)
 expect("strict-keeps-reads", flow("api.github.com", "/repos/me/proj/issues/1", method="GET", body=b""), False)
 addon.STRICT.clear()
 # Muse answers "not sure" on an allowed write -> it waits for you instead of going out.
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "escalate", "reason": "opaque hex string"}'}}], "usage": {}}
 expect("history-unsure-asks-you", flow(*comment, body=b'{"body":"ci log 4f3a9c0b1d2e"}'), True, "waiting for you")
 os.environ.pop("META_MODEL_API_KEY")
@@ -141,7 +142,7 @@ def answer(esc_id, decision):
     c.execute("INSERT INTO decisions VALUES(?,?,0)", (esc_id, decision))
     c.commit()
 os.environ["META_MODEL_API_KEY"] = "test-not-real"
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "escalate", "reason": "unclear purpose"}'}}], "usage": {}}
 probe = ("docs.example.org", "/q?x=1")
 f1 = flow(*probe, method="GET", body=b"")
@@ -157,13 +158,13 @@ answer(esc2, "deny")
 expect("denied-sticks", flow(*probe, method="GET", body=b""), True, "denied by you")
 expect("approval-never-beats-hard-rule", flow("docs.example.org", "/q", body=PH_OA.encode()), True, "tripwire")
 # Your approval works even with a 0 new-site allowance (it gets the normal cap), and on an allowed write too.
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "allow-with-budget", "reason": "looks harmless"}'}}], "usage": {}}
 newsite = ("pypi.org", "/simple/x/")
 expect("zero-cap-waits", flow(*newsite, method="GET", body=b""), True, "new site needs you")
 answer(addon.DB.execute("select max(id) from escalations").fetchone()[0], "allow")
 expect("you-allow-new-site-despite-zero-cap", flow(*newsite, method="GET", body=b""), False)
-muse._post = lambda payload, key: {"choices": [{"message": {"content":
+muse._post = lambda payload, key, *a: {"choices": [{"message": {"content":
     '{"verdict": "escalate", "reason": "not sure"}'}}], "usage": {}}
 w = ("api.github.com", "/repos/me/proj/issues/1/comments")
 expect("write-waits", flow(*w, body=b'{"body":"hmm"}'), True, "waiting for you")
@@ -187,6 +188,53 @@ expect("lock-reloads", flow("pypi.org", "/simple/requests/", method="GET", body=
 R.load_policy("checkpoint/policy.json")
 os.environ.pop("META_MODEL_API_KEY")
 _shutil.rmtree(tmp)
+
+# Muse Wonder decides what Spark is unsure about: no human queue, fail closed, never past a rule or budget.
+addon.DECIDER = "wonder"
+addon.STRICT.clear()
+os.environ["META_MODEL_API_KEY"] = "test-not-real"
+def models(wonder, spark="escalate"):
+    def post(payload, key, *a):
+        if payload["model"] == muse.DECIDER_MODEL:
+            if wonder is None:
+                raise TimeoutError()
+            return {"choices": [{"message": {"content": f'{{"verdict": "{wonder}", "reason": "wonder says {wonder}"}}'}}], "usage": {}}
+        return {"choices": [{"message": {"content": f'{{"verdict": "{spark}", "reason": "spark unsure"}}'}}], "usage": {}}
+    return post
+queued = addon.DB.execute("select count(*) from escalations").fetchone()[0]
+muse._post = models("deny")
+expect("wonder-deny-blocks", flow("docs.example.org", "/w1", method="GET", body=b""), True, "muse-wonder")
+expect("wonder-deny-blocks-write", flow(*w, body=b'{"body":"ci 4f3a9c0b1d2e"}'), True, "muse-wonder")
+muse._post = models("allow")
+expect("wonder-allows-write", flow(*w, body=b'{"body":"tests pass"}'), False)
+if addon.DB.execute("select reviewer from moves order by id desc limit 1").fetchone()[0] != "muse-wonder":
+    fails.append("wonder allow not logged as muse-wonder")
+expect("wonder-allow-new-site-zero-cap", flow("docs.example.org", "/w2", method="GET", body=b""), True,
+       "no allowance for new sites")
+expect("wonder-never-beats-tripwire", flow("docs.example.org", "/w3", body=PH_OA.encode()), True, "tripwire")
+muse._post = models(None)
+expect("wonder-down-denies", flow("docs.example.org", "/w4", method="GET", body=b""), True, "fail-closed")
+# A Spark timeout on an allowed write must not let it through unreviewed: Wonder decides, and if it's down too, deny.
+muse._post = lambda payload, key, *a: (_ for _ in ()).throw(TimeoutError())
+expect("spark-down-write-denied", flow(*w, body=b'{"body":"random string: 5f7f4d3ba662"}'), True, "muse-wonder")
+def spark_down_wonder(answer):
+    def post(payload, key, *a):
+        if payload["model"] != muse.DECIDER_MODEL:
+            raise TimeoutError()
+        return {"choices": [{"message": {"content": f'{{"verdict": "{answer}", "reason": "wonder {answer}"}}'}}], "usage": {}}
+    return post
+muse._post = spark_down_wonder("deny")
+expect("spark-down-wonder-denies", flow(*w, body=b'{"body":"password: 50694d38cbd0"}'), True, "Spark unavailable")
+muse._post = spark_down_wonder("allow")
+expect("spark-down-wonder-allows", flow(*w, body=b'{"body":"tests pass"}'), False)
+addon.STRICT.add("coder")
+muse._post = models("allow")
+expect("wonder-strict-denies", flow("docs.example.org", "/w5", method="GET", body=b""), True, "nothing new goes out")
+addon.STRICT.clear()
+if addon.DB.execute("select count(*) from escalations").fetchone()[0] != queued:
+    fails.append("wonder mode created human-queue escalations")
+addon.DECIDER = "human"
+os.environ.pop("META_MODEL_API_KEY")
 
 # A crashing check must block, not pass the flow through unchecked.
 orig = R.check_keys

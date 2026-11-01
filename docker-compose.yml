@@ -27,6 +27,7 @@ services:
       - PYTHONPATH=/app
       - HEIMDALL_DB=/data/checkpoint.db
       - HEIMDALL_CA_OUT=/data/ca/mitmproxy-ca-cert.pem
+      - HEIMDALL_DECIDER=${HEIMDALL_DECIDER:-wonder}  # who settles what Muse Spark is unsure about: wonder | human
       - HEIMDALL_GUARD_URL=${HEIMDALL_GUARD_URL:-http://guard:8002}  # GPU guard on a Mac: http://host.docker.internal:8002
       - HEIMDALL_POLICY=/data/policy.json  # live, written by the review page's lock
       - HEIMDALL_POLICY_SEED=/app/checkpoint/policy.json

@@ -234,7 +234,7 @@ pre.log:empty { display: none; }
     <p class="headline" id="headline"></p>
     <div class="tiles" id="tiles"></div>
     <div class="two">
-      <div class="box"><h2>Needs you <span id="h-wait-n"></span></h2><ol id="h-wait"></ol></div>
+      <div class="box"><h2>Decisions <span class="note" id="h-wait-n"></span></h2><ol id="h-wait"></ol></div>
       <div class="box"><h2>Latest blocked <button type="button" class="linkish" id="h-to-live">Watch live</button></h2><ol id="h-stop"></ol></div>
     </div>
     <div class="box"><h2>Attack test score <button type="button" class="linkish" id="open-results">See every attack</button></h2><div id="h-score"></div></div>
@@ -282,7 +282,7 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
-const stripMeta = (r) => r.replace(/\s*\[muse [^\]]*\]/, "");
+const stripMeta = (r) => r.replace(/\s*\[(muse|wonder) [^\]]*\]/g, "");
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -357,6 +357,8 @@ function explain(m) {
   if (m.verdict === "learn") return { kind: "pass", layer: "rules", title: "Recorded while learning", why: "Learning run: new kinds of request pass and are saved for you to approve." };
   if (m.verdict !== "block") {
     if (who === "human") return { kind: "pass", layer: "you", title: "Allowed by you", why: "You approved this exact request once." };
+    if (who === "muse-wonder") return { kind: "pass", layer: "muse", title: "Allowed by Muse Wonder",
+      why: `Muse Spark wasn't sure, so Muse Wonder made the call: ${r.replace(/^.*Wonder allowed: /, "").replace(/^allow: /, "")}` };
     if (who === "muse-reviewer") return { kind: "pass", layer: "muse", title: "Allowed by Muse", why: `New, but Muse judged it safe: ${r}` };
     if (who === "muse-history") return { kind: "pass", layer: "muse", title: "Allowed", why: "One of its normal moves, and Muse checked the content fits its job." };
     return { kind: "pass", layer: "rules", title: "Allowed", why: "Matches one of its approved moves." };
@@ -369,6 +371,10 @@ function explain(m) {
         : `Muse wasn't sure: ${r.replace(/^escalate: /, "").replace(/\s*\(escalation[^)]*\)\s*$/, "")}` };
   }
   if (who === "human") return { kind: "stop", layer: "you", title: "Denied by you", why: "You said no to this request." };
+  if (who === "muse-wonder") return { kind: "stop", layer: "muse", title: "Blocked by Muse Wonder",
+    why: `Muse Spark wasn't sure, so Muse Wonder made the call: ${r.replace(/^deny: /, "").replace(/\s*\(Spark unsure:.*\)$/s, "")}` };
+  if (/no allowance for new sites/.test(r)) return { kind: "stop", layer: "rules", title: "Blocked: no new sites",
+    why: `It looked harmless, but ${m.agent} isn't allowed to send to sites it hasn't been approved for.` };
   if (who === "muse-reviewer") return { kind: "stop", layer, title: "Blocked by Muse",
     why: /unavailable|no Muse key/.test(r) ? "Muse couldn't be reached, so anything new is blocked to be safe." : `Muse judged it unsafe: ${r.replace(/^deny: /, "")}` };
   if (who === "muse-history") return { kind: "stop", layer, title: "Blocked by Muse",
@@ -452,8 +458,11 @@ function renderHome(piles) {
   $("tiles").replaceChildren(tile("", s.passed + s.stopped, "requests"), tile("s", s.stopped, "blocked"), tile("p", s.passed, "allowed"),
     tile("w", wait, "need you"), tile("", fmtBytes(out), "data sent out"));
   const newest = (xs, n) => xs.slice(-n).reverse();
-  $("h-wait-n").textContent = wait || "";
-  $("h-wait").replaceChildren(...(wait ? newest(piles.wait, 8).map(askRow) : [el("li", "empty", "Nothing is waiting for you.")]));
+  // What waits for you (human mode) first, then the calls Muse Wonder made when Muse Spark wasn't sure.
+  const wonder = all.filter((m) => m.reviewer === "muse-wonder" && landed.has(m.id));
+  $("h-wait-n").textContent = wait ? `${wait} waiting for you` : wonder.length ? `${wonder.length} made by Muse Wonder` : "";
+  const rows = [...newest(piles.wait, 8).map(askRow), ...newest(wonder, 8 - Math.min(wait, 8)).map((m) => li(card(m)))];
+  $("h-wait").replaceChildren(...(rows.length ? rows : [el("li", "empty", "Nothing needed a decision. When Muse Spark isn't sure, Muse Wonder decides and it shows up here.")]));
   $("h-stop").replaceChildren(...(piles.stop.length ? newest(piles.stop, 8).map((m) => li(card(m))) : [el("li", "empty", "Nothing blocked.")]));
   const stat = (cls, big, label) => { const d = el("div"); d.append(el("span", `big ${cls}`, big), el("small", null, label)); return d; };
   const row = (...xs) => { const b = el("div", "score"); b.append(...xs); return b; };
@@ -715,7 +724,8 @@ function stepView(st) {
   else if (m) {
     const waiting = /waiting for you/.test(m[2]);
     kind = waiting ? "wait" : "stop";
-    res = [waiting ? `Stopped: waiting for you (${LAYERS[layerOf(m[1])]} wasn't sure)` : `Blocked by ${LAYERS[layerOf(m[1])]}`, stripMeta(m[2]).trim()];
+    res = [waiting ? `Stopped: waiting for you (${LAYERS[layerOf(m[1])]} wasn't sure)`
+      : m[1] === "muse-wonder" ? "Blocked by Muse Wonder (Muse Spark wasn't sure)" : `Blocked by ${LAYERS[layerOf(m[1])]}`, stripMeta(m[2]).trim()];
   } else if (/^HTTP \d/.test(obs)) { kind = "pass"; res = [`Went through (${obs.slice(0, 8)})`, obs.slice(9, 160)]; }
   else if (obs) res = ["", obs.slice(0, 160)];
   const li = el("li", `step ${kind}`);

@@ -18,7 +18,7 @@ from mitmproxy import ctx, http
 from checkpoint import rules as R
 from checkpoint.creds import swap_placeholders
 from checkpoint.db import connect, escalate, flagged_today, human_decision, log, mark_used, open_escalation, recent
-from reviewer.muse import quote_redacted, review_history, review_unknown
+from reviewer.muse import decide_escalation, quote_redacted, review_history, review_unknown
 
 # Live policy is writable (the review page locks learned moves into it); first start copies the repo's seed.
 POLICY = os.environ.get("HEIMDALL_POLICY", str(Path(__file__).with_name("policy.json")))
@@ -42,6 +42,12 @@ SCANNED_TYPES = re.compile(r"text/|application/(json|xml|javascript|x-www-form-u
 # Strict mode: agent read flagged content. Unknown moves block (no reviewer allows); allowed writes need Muse's OK.
 STRICT: set[str] = flagged_today(DB)
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# PromptGuard scans get their own threads: a slow Muse call (Wonder can take 10-30 s under load) must never
+# make every response wait behind it. Muse calls use the default pool, sized in running().
+GUARD_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="guard")
+# Who settles what Muse Spark is unsure about. "wonder": Muse Wonder decides allow/deny on the spot (fail closed),
+# so agents run 24/7 without anyone watching. "human": the request waits in the review page's queue for you.
+DECIDER = os.environ.get("HEIMDALL_DECIDER", "wonder")
 
 
 def _agent(flow) -> str | None:
@@ -142,6 +148,12 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
         e = escalate(DB, agent, req.method, host, shown, req_sha, quote_redacted(reason, 512))
         return _block(flow, agent, nbytes, f"{reason} (escalation #{e}, waiting for you)", who)
 
+    async def second_opinion(first_reason: str) -> tuple[bool, str]:
+        """Spark was unsure: Muse Wonder decides. Never past a hard rule (those already ran), budgets still apply."""
+        v, why = await asyncio.to_thread(decide_escalation, agent, R.ALLOWLIST[agent]["task"], recent(DB, agent),
+                                         req.method, host, path, body, first_reason)
+        return v == "allow", why
+
     if esc is not None:
         decision = human_decision(DECISIONS, esc)
         if decision != "allow":
@@ -155,27 +167,52 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
                 review_history, agent, R.ALLOWLIST[agent]["task"], recent(DB, agent), req.method, host, path, body)
             if hv == "deny":
                 return _block(flow, agent, nbytes, f"deny: {hwhy}", "muse-history")
-            if hv == "escalate":  # Muse answered "not sure": you decide, not the default
-                return to_human(f"escalate: {hwhy}", "muse-history")
-            if hv == "unavailable" and strict:  # Muse unreachable: allowed writes go on, unless under watch
-                return _block(flow, agent, nbytes, f"unavailable (strict mode): {hwhy}", "muse-history")
-            verdict, why, who = "allow", f"endpoint rule; history {hv}: {hwhy}", "muse-history"
+            if hv == "escalate":  # Spark answered "not sure"
+                if DECIDER == "human":
+                    return to_human(f"escalate: {hwhy}", "muse-history")
+                ok, wwhy = await second_opinion(hwhy)
+                if not ok:
+                    return _block(flow, agent, nbytes, f"deny: {wwhy} (Spark unsure: {hwhy})", "muse-wonder")
+                verdict, why, who = "allow", f"endpoint rule; Spark unsure, Wonder allowed: {wwhy}", "muse-wonder"
+            elif hv == "unavailable":
+                if strict:  # under watch: nothing unreviewed goes out
+                    return _block(flow, agent, nbytes, f"unavailable (strict mode): {hwhy}", "muse-history")
+                if DECIDER == "human":  # human mode keeps writes flowing while Muse is down (documented limit)
+                    verdict, why, who = "allow", f"endpoint rule; history unavailable: {hwhy}", "muse-history"
+                else:
+                    # An unreviewed write is how a slow leak gets out: a Spark timeout must not open the door.
+                    # Wonder decides; if it can't either, the write is denied (fail closed).
+                    ok, wwhy = await second_opinion(f"history review unavailable: {hwhy}")
+                    if not ok:
+                        return _block(flow, agent, nbytes, f"deny: {wwhy} (Spark unavailable)", "muse-wonder")
+                    verdict, why, who = "allow", f"endpoint rule; Spark unavailable, Wonder allowed: {wwhy}", "muse-wonder"
+            else:
+                verdict, why, who = "allow", f"endpoint rule; history {hv}: {hwhy}", "muse-history"
     elif learning:
         verdict, why, who = "learn", "learning run: recorded for your approval", "learn-mode"
-    elif strict:
-        return to_human("strict mode: agent read flagged content, unknown moves need you", "strict-mode")
+    elif strict:  # read hidden instructions: no model may allow anything new for this agent
+        if DECIDER == "human":
+            return to_human("strict mode: agent read flagged content, unknown moves need you", "strict-mode")
+        return _block(flow, agent, nbytes, "strict mode: agent read flagged content, nothing new goes out", "strict-mode")
     else:
         # Only an exact allow-with-budget passes; escalate goes to the human queue; anything else blocks.
         # Worker thread: a 1-3s Muse call must not stall every other agent request on the event loop.
         verdict, why = await asyncio.to_thread(review_unknown, agent, req.method, host, path, body)
         who = "muse-reviewer"
         if verdict == "escalate":
-            return to_human(f"escalate: {why}", who)
+            if DECIDER == "human":
+                return to_human(f"escalate: {why}", who)
+            ok, wwhy = await second_opinion(why)
+            if not ok:
+                return _block(flow, agent, nbytes, f"deny: {wwhy} (Spark unsure: {why})", "muse-wonder")
+            verdict, why, who = "allow-with-budget", f"Spark unsure, Wonder allowed: {wwhy}", "muse-wonder"
         if verdict != "allow-with-budget":
             return _block(flow, agent, nbytes, f"{verdict}: {why}", who)
         if R.ALLOWLIST[agent]["unknown_day"] == 0:
-            # This agent has no allowance for new sites: a Muse "looks harmless" is a suggestion to you, not a pass.
-            return to_human(f"new site needs you: Muse thinks it's harmless ({why})", who)
+            # This agent has no allowance for new sites: a model's "looks harmless" is not a pass.
+            if DECIDER == "human":
+                return to_human(f"new site needs you: Muse thinks it's harmless ({why})", who)
+            return _block(flow, agent, nbytes, f"new site: {agent} has no allowance for new sites (looked harmless: {why})", who)
 
     # Learning runs and your own approvals get the normal daily cap for new sites (still one shared bucket).
     reason = R.count_egress(agent, host, nbytes, known_host, trusted=cap is None and (learning or who == "human"))
@@ -224,7 +261,8 @@ async def response(flow: http.HTTPFlow) -> None:
         return
     agent = _agent(flow)
     try:
-        score = await asyncio.to_thread(_guard_score, flow.response.get_text(strict=False) or "")
+        score = await asyncio.get_running_loop().run_in_executor(
+            GUARD_POOL, _guard_score, flow.response.get_text(strict=False) or "")
         why = f"PromptGuard injection score {score:.2f}"
     except Exception as e:
         score, why = 1.0, f"PromptGuard unavailable, fail-closed ({type(e).__name__})"

@@ -14,7 +14,7 @@ sent = []
 
 
 def fake(content, usage=None):
-    def _post(payload, api_key):
+    def _post(payload, api_key, *a):
         sent.append(payload)
         if isinstance(content, Exception):
             raise content
@@ -85,6 +85,25 @@ fake(TimeoutError())
 expect("history-down", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "unavailable", "unavailable")
 os.environ.pop("META_MODEL_API_KEY")
 expect("history-no-key", muse.review_history("coder", "t", [], "POST", "h", "/p", b"x"), "unavailable", "no Muse key")
+
+# Muse Wonder: the second opinion only ever answers allow or deny, and anything else means deny.
+def decide(body=b"x"):
+    return muse.decide_escalation("coder", "t", [], "POST", "h", "/p", body, "escalate: unsure [muse 9ms in=1 out=1]")
+expect("decide-no-key", decide(), "deny", "no Muse key")
+os.environ["META_MODEL_API_KEY"] = "test-not-real"
+fake(json.dumps({"verdict": "deny", "reason": "encoded blob"}))
+expect("decide-deny", decide(), "deny", "[wonder ")
+if sent[-1]["model"] != muse.DECIDER_MODEL:
+    fails.append(f"decider called {sent[-1]['model']}, not {muse.DECIDER_MODEL}")
+if "[muse 9ms" in sent[-1]["messages"][1]["content"]:
+    fails.append("Spark's latency marker leaked into the decider prompt")
+fake(json.dumps({"verdict": "allow", "reason": "progress note"}))
+expect("decide-allow", decide(), "allow", "progress note")
+fake(json.dumps({"verdict": "escalate", "reason": "not sure"}))
+expect("decide-off-schema-denies", decide(), "deny", "fail-closed")
+fake(TimeoutError())
+expect("decide-down-denies", decide(), "deny", "fail-closed")
+os.environ.pop("META_MODEL_API_KEY")
 
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
 sys.exit(1 if fails else 0)
