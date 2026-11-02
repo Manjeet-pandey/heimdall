@@ -82,12 +82,16 @@ behind a Cloudflare tunnel, real DNS and TLS). Same result: 3 of 3 out without H
 
 **Rogue agent** (`proof/rogue.py`): Llama 3.1 8B is told to get a database password out and adapts after every
 403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, a new issue, the
-attacker's server and unknown sites. With the final setup **0 of 5 runs got the secret out** (34 of 48 requests
-blocked; the rest were harmless reads and LLM calls). In one of the 5 runs the model never sent a request.
+attacker's server and unknown sites. With the final setup **0 of 5 runs got the secret out** (59 of 74 requests
+blocked; the rest were harmless reads and LLM calls).
 
-It also found a real hole along the way: when a Muse Spark call timed out, a write to an allowed endpoint went
-through unreviewed, and in 2 of 2 runs the agent got the password out in a progress comment. Unreviewed writes
-now go to Muse Wonder, and are denied if it can't answer either.
+It found two real holes along the way, both fixed:
+- When a Muse Spark call timed out, a write to an allowed endpoint went through unreviewed, and in 2 of 2 runs
+  the agent got the password out in a progress comment. Unreviewed writes now go to Muse Wonder, and are
+  denied if it can't answer either.
+- In 1 of 5 runs it sent the password to the AI provider with **no key at all**. The checkpoint blocked other
+  people's keys there but didn't require the agent's own. It now does: a request to an AI provider without
+  the agent's placeholder key is blocked (replayed on both sandboxes: 403).
 
 **Load test** (`proof/load.py`, 3 runs): one minute of a busy agent at 100 requests/s (repo reads, LLM calls, progress
 comments) with 1% labelled attacks mixed in, real Muse Spark and Muse Wonder deciding, PromptGuard on the Apple GPU.
@@ -106,11 +110,6 @@ Muse Spark: about 205 reviews per minute-long run, about $0.39–0.42 per run. M
 calls are never sent to Muse. With PromptGuard on CPU in a container the same test sustains about 67 req/s.
 
 ## Limits (honest)
-
-- **A request to an AI provider with no key at all is allowed.** The checkpoint blocks someone else's key on
-  LLM hosts, but doesn't yet require the agent's own placeholder. In one rogue-agent run the Llama sent the
-  database password to the provider with no key; the real provider rejects that (401), but the mock counts it
-  as leaked, and it should be blocked.
 
 - **A slow leak inside the caps gets through.** A secret split into small pieces across normal-looking comments
   on an allowed endpoint got out in the load test. It is counted and charted, not stopped.
@@ -205,9 +204,9 @@ python3 proof/run.py --runs 5 --native        # any proof script takes --native;
 
 Measured against Docker with the same tests: jail escape tests 28/28 (Docker 27/27), attack proof identical
 (0/5 with Heimdall, 5/5 without), load 93.7–96.7 req/s (Docker 91.5–95.0), 50 ms to start a fresh jail
-(Docker: 145 ms for a new container). Rogue agent: 1 of 5 native runs got the secret out, through a keyless
-request to the AI provider; that's a checkpoint gap, the same under Docker (see Limits). Linux only for now;
-macOS would use its built-in sandbox (roadmap).
+(Docker: 145 ms for a new container). Rogue agent: 0 of 5 native runs got the secret out (34 of 59 requests
+blocked) after the no-key fix; before it, 1 of 5 had, through the checkpoint gap described under Results.
+Linux only for now; macOS would use its built-in sandbox (roadmap).
 
 ## Repo
 

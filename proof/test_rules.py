@@ -68,6 +68,10 @@ check("foreign-query", keys(OA, url="https://api.openai.com/v1?key=sk-abc1234567
 check("foreign-query-lookahead", keys(OA, url="https://api.openai.com/v1?k=sk-REALREALREAL&p=x"), True)
 check("foreign-body-deep", keys(OA, body=b'{"p":"' + b"A" * 5000 + b'sk-REALREALREAL"}'), True)
 check("foreign-custom-header", keys(OA, [("X-Debug", "ghp_abcdefgh12345")]), True)
+# No key at all on an LLM host: the prompt still leaves (rogue agent found this). Not on other hosts.
+check("llm-no-key", keys(OA), True)
+check("llm-empty-auth", keys(OA, [("Authorization", "")]), True)
+check("github-no-key-ok", keys(GH, url="https://api.github.com/repos/me/proj/issues/1"), False)
 # provider-side fetch
 def pf(body):
     return R.check_provider_fetch("coder", OA, body)

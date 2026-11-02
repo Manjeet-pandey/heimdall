@@ -19,10 +19,12 @@ for p in python3.13 python3.12 python3.11 python3.10 python3; do
 done
 [ -n "$PY" ] || { echo "Need Python 3.10 or newer (brew install python@3.12)."; exit 1; }
 PORT=${REVIEW_PORT:-8000}
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -Eqv "^COMMAND|com\.docke"; then
+docker info >/dev/null 2>&1 || { echo "Docker isn't running. Start Docker and try again."; exit 1; }
+# The review page runs here, not in its container: free the port the container may hold, then check it.
+docker compose stop review >/dev/null 2>&1 || true
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Port $PORT is in use by another program (an older review page?). Stop it, or run REVIEW_PORT=8010 ./start.sh"; exit 1
 fi
-docker info >/dev/null 2>&1 || { echo "Docker isn't running. Start Docker and try again."; exit 1; }
 [ -f .env.secrets ] || { echo "No .env.secrets: copy .env.secrets.example and add your keys (META_MODEL_API_KEY for Muse)."; exit 1; }
 
 # 1. Llama 3.1 8B for the rogue agent (llama.cpp). Local GGUF if we have one, else llama.cpp downloads it once.
@@ -53,7 +55,6 @@ else
 fi
 
 # 3. The stack. The review page runs here instead of in its container, so its Run buttons can start runs.
-docker compose stop review >/dev/null 2>&1 || true
 docker compose up -d checkpoint coder guard >/dev/null
 echo "stack: checkpoint, sandbox and PromptGuard up"
 

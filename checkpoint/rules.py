@@ -150,6 +150,10 @@ def check_keys(
                 return f"foreign credential in {k.lower()} on LLM host"
         if FOREIGN_KEY_RE.search(blob + "\n" + "\n".join(v for _, v in headers)):
             return "foreign credential in query/body/headers on LLM host"
+        # No key at all isn't harmless: the prompt still leaves, to whoever answers unauthenticated requests.
+        # (Any placeholder found here was already checked above to be this agent's, for this host.)
+        if not any(k.lower() in FOREIGN_KEY_HEADERS and PLACEHOLDER_RE.search(v) for k, v in headers):
+            return "no credential on LLM host (only your own placeholder key may be used)"
     return None
 
 
