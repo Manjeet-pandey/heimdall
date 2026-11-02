@@ -29,10 +29,20 @@ def _compose() -> list[str]:
     return base + ["-f", "docker-compose.yml", "-f", "docker-compose.attack.yml"]
 
 
-COMPOSE = _compose()
+# Which jail the agent runs in: Docker (default) or the native Linux sandbox (./heimdall, bubblewrap).
+# Pick native with --native on any proof script, or HEIMDALL_SANDBOX=native.
+NATIVE = os.environ.get("HEIMDALL_SANDBOX") == "native" or "--native" in sys.argv
+if "--native" in sys.argv:
+    sys.argv.remove("--native")  # before each script's own argparse sees it
+if NATIVE:  # load ./heimdall from source every time: a stale bytecode cache would test old jail code
+    import types
+    hd = types.ModuleType("heimdall")
+    hd.__file__ = os.path.abspath("heimdall")
+    exec(compile(open(hd.__file__).read(), hd.__file__, "exec"), hd.__dict__)
+COMPOSE = [] if NATIVE else _compose()
 PLAIN = COMPOSE[:2]  # the normal stack, without the attack overlay
 ADMIN = "http://127.0.0.1:18001"
-OUT = os.environ.get("PROOF_OUT", "proof/out")  # live run: proof/out-live, so it never overwrites the mock results
+OUT = os.environ.get("PROOF_OUT", "proof/out-native" if NATIVE else "proof/out")  # live run: proof/out-live
 # Live run: the attacker host's admin port, read over the LAN (never through the public tunnel).
 ADMINS = [ADMIN] + [a for a in [os.environ.get("HEIMDALL_ATTACKER_ADMIN")] if a]
 # Muse Spark list price (Standard tier) as published by third-party listings; check your Meta bill.
@@ -59,6 +69,46 @@ def wait_http(url: str, timeout: int = 120) -> None:
     raise SystemExit(f"timed out waiting for {url}: {last}")
 
 
+def agent_exec(cmd: list, env: dict, input: str | None = None, timeout: float | None = None,
+               check: bool = False) -> subprocess.CompletedProcess:
+    """Run cmd as the coder agent inside its jail, test scripts mounted read-only at /attacks."""
+    if NATIVE:
+        r = hd.run("coder", cmd, work="agent-work/coder", ro=[("attacks", "/attacks")], env=env, input=input,
+                   capture=True, timeout=timeout)
+    else:
+        e = sum((["-e", f"{k}={v}"] for k, v in env.items()), [])
+        r = subprocess.run(COMPOSE + ["exec", "-T", *e, "coder", *cmd], input=input, capture_output=True,
+                           text=True, timeout=timeout)
+    if check and r.returncode:
+        raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr)
+    return r
+
+
+def stack_begin() -> bool:
+    """Stop the normal stack for a test run; returns whether it was up, for stack_end."""
+    if NATIVE:
+        was_up = hd.is_up()
+        hd.down()
+        return was_up
+    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
+    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
+    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    return was_up
+
+
+def stack_end(was_up: bool) -> None:
+    """Even after a crash: never leave the stack in attack mode, and give back what was running."""
+    if NATIVE:
+        hd.down()
+        if was_up:
+            hd.up()
+        return
+    subprocess.run(COMPOSE + ["down"], capture_output=True)
+    if was_up:
+        print("restarting your normal stack", file=sys.stderr)
+        subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+
+
 def wait_exec(timeout: int = 120) -> None:
     """The agent runs via `exec` in the coder box; make sure the box takes execs before laps start."""
     deadline = time.time() + timeout
@@ -71,6 +121,10 @@ def wait_exec(timeout: int = 120) -> None:
 
 
 def up(cond: str) -> None:
+    if NATIVE:
+        hd.up(attack=True, supervisor=cond)
+        wait_http("http://127.0.0.1:18001/")
+        return
     env = {**os.environ, "HEIMDALL_SUPERVISOR": cond}
     subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "guard", "checkpoint", "mock", "coder"],
                    env=env, check=True, capture_output=True)
@@ -86,10 +140,16 @@ def fresh_checkpoint(cond: str) -> None:
     """Runs must be independent: a new checkpoint process (budget, strict mode, Muse cache live in memory)
     and an empty log (history review and strict mode also read it). Otherwise run 3 is judged on runs 1-2."""
     env = {**os.environ, "HEIMDALL_SUPERVISOR": cond}
-    subprocess.run(COMPOSE + ["stop", "checkpoint"], env=env, check=True, capture_output=True)
+    if NATIVE:
+        hd._stop("checkpoint")
+    else:
+        subprocess.run(COMPOSE + ["stop", "checkpoint"], env=env, check=True, capture_output=True)
     for f in ("data/attack.db", "data/attack.decisions.db"):
         if os.path.exists(f):
             os.remove(f)
+    if NATIVE:
+        hd.start_checkpoint(attack=True, supervisor=cond)
+        return
     subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "--no-deps", "checkpoint"],
                    env=env, check=True, capture_output=True)
     wait_http("http://127.0.0.1:8080/")
@@ -106,9 +166,7 @@ def archive(name: str) -> None:
 def run_once(cond: str, run_id: str) -> tuple[list[dict], bool]:
     for a in ADMINS:
         urllib.request.urlopen(urllib.request.Request(a + "/reset", method="POST"))
-    env = sum((["-e", f"{k}={v}"] for k, v in {**AGENT_KEYS[cond], "RUN_ID": run_id}.items()), [])
-    out = subprocess.run(COMPOSE + ["exec", "-T", *env, "coder", "python", "/attacks/agent.py"],
-                         capture_output=True, text=True, check=True).stdout
+    out = agent_exec(["python3", "/attacks/agent.py"], {**AGENT_KEYS[cond], "RUN_ID": run_id}, check=True).stdout
     seen = "\n".join(r["text"] for a in ADMINS for r in json.load(urllib.request.urlopen(a)) if r["visible"])
     moves = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
     for m in moves:
@@ -133,10 +191,8 @@ def main() -> None:
         attack()
         return
     # If your normal stack is up, the test borrows it and puts it back afterwards.
-    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
-    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
     # Fresh log per proof run: strict mode persists for the day, so a stale flag would skew this run.
-    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    was_up = stack_begin()
     shutil.rmtree(RUNS_DIR, ignore_errors=True)
     moves, key_leaks = [], collections.Counter()
     try:
@@ -150,11 +206,7 @@ def main() -> None:
                 key_leaks[cond] += key_leak
                 print(f"{cond} run {i + 1}/{args.runs}: {sum(m['leaked'] for m in ms)} variants leaked", file=sys.stderr)
     finally:
-        # Even if the test crashes: never leave the stack in attack mode, and give back what was running.
-        subprocess.run(COMPOSE + ["down"], capture_output=True)
-        if was_up:
-            print("restarting your normal stack", file=sys.stderr)
-            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+        stack_end(was_up)
 
     os.makedirs(OUT, exist_ok=True)
     with open(f"{OUT}/moves.csv", "w", newline="") as f:
@@ -171,8 +223,7 @@ def main() -> None:
 def attack() -> None:
     """One live attack through the full supervisor: fresh log, no unprotected baseline.
     For watching — the feed and piles start empty and fill as it happens."""
-    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
-    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    was_up = stack_begin()
     try:
         up("full")
         fresh_checkpoint("full")  # clean log: this attack owns attack.db from here on
@@ -181,11 +232,7 @@ def attack() -> None:
         print(f"live attack: {sum(m['leaked'] for m in ms)} leaked, "
               f"task {'done' if task else 'broken'}, key reached attacker: {key_leak}", file=sys.stderr)
     finally:
-        # Even if the attack crashes: never leave the stack in attack mode, and give back what was running.
-        subprocess.run(COMPOSE + ["down"], capture_output=True)
-        if was_up:
-            print("restarting your normal stack", file=sys.stderr)
-            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+        stack_end(was_up)
 
 
 def stream(pace: float) -> None:
@@ -202,19 +249,14 @@ def stream(pace: float) -> None:
 
     signal.signal(signal.SIGTERM, _halt)
     signal.signal(signal.SIGINT, _halt)
-    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
-    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
-    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    was_up = stack_begin()
     try:
         up("full")
         fresh_checkpoint("full")  # clean feed: this stream owns attack.db from here on
         n = 0
         while not stop:
             n += 1
-            env = sum((["-e", f"{k}={v}"] for k, v in
-                       {**AGENT_KEYS["full"], "RUN_ID": f"stream-{n}"}.items()), [])
-            r = subprocess.run(COMPOSE + ["exec", "-T", *env, "coder", "python", "/attacks/agent.py"],
-                               capture_output=True, text=True)
+            r = agent_exec(["python3", "/attacks/agent.py"], {**AGENT_KEYS["full"], "RUN_ID": f"stream-{n}"})
             blocked = sum(1 for line in r.stdout.splitlines()
                           if line.startswith("{") and '"status": 403' in line)
             print(f"stream lap {n}: {blocked} blocked", file=sys.stderr, flush=True)
@@ -222,10 +264,7 @@ def stream(pace: float) -> None:
             while not stop and time.time() < deadline:
                 time.sleep(0.5)
     finally:
-        subprocess.run(COMPOSE + ["down"], capture_output=True)
-        if was_up:
-            print("restarting your normal stack", file=sys.stderr)
-            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+        stack_end(was_up)
 
 
 def summarize(moves: list[dict], key_leaks, n_runs: int) -> dict:

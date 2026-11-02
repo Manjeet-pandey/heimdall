@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""Heimdall on plain Linux: no Docker, no images. The agent runs from your own machine, in a bubblewrap jail
+that sees almost nothing and whose only way out is the checkpoint.
+
+    ./heimdall setup                    # once: mitmproxy in a private venv; checks bubblewrap works
+    ./heimdall up                       # the checkpoint, as a plain process (./heimdall down stops it)
+    ./heimdall run --agent coder -- claude -p "fix the failing CI"
+
+The jail (deny by default):
+  - files: system dirs read-only; the work dir (default: current dir) is the only writable place; $HOME is an
+    empty per-agent folder; /tmp is fresh. Your real home (~/.ssh, ~/.aws, ...), this repo's .env.secrets and
+    the checkpoint's CA key don't exist inside.
+  - network: an empty network namespace. The agent's proxy (127.0.0.1:8080 inside) is a relay over a Unix
+    socket to the checkpoint; there is no other route, no DNS, no host services.
+  - privileges: own user/pid/ipc/uts/cgroup namespaces, all capabilities dropped, no nested user namespaces,
+    a seccomp filter like Docker's default, new session (no terminal injection).
+  - limits (cgroup, via systemd): 1 CPU, 1 GB RAM (no swap), 256 processes, 1024 open files.
+  - keys: the agent gets its placeholders from the policy; the checkpoint swaps in real keys.
+Child processes (subagents, tools) inherit all of it.
+"""
+
+import argparse
+import errno
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+STATE = Path(os.environ.get("HEIMDALL_STATE", Path.home() / ".local/share/heimdall"))
+VENV = STATE / "venv"
+CONFDIR = STATE / "mitmproxy"  # CA private key: never mounted into a jail
+CA_CERT = STATE / "ca.pem"     # public CA cert, published by the checkpoint for agents
+RUN_DIR = STATE / "run"
+PROXY_PORT = 8080
+LOGINS = {"coder": "coder-pass"}  # proxy login = agent identity (same as docker-compose.yml)
+MITMPROXY = "mitmproxy==11.1.3"   # the Docker checkpoint's version
+MOCK_PORT, MOCK_ADMIN_PORT = 18000, 18001
+LIMITS = {"MemoryMax": "1G", "MemorySwapMax": "0", "TasksMax": "256", "CPUQuota": "100%",
+          "OOMPolicy": "continue"}  # out of memory: kill the hungry process, not the whole agent (as Docker does)
+NOFILE = 1024
+JAIL = "/run/heimdall"
+
+# Docker's default seccomp profile, roughly: kernel keyring, BPF, module loading, mounts, namespace changes,
+# clock/reboot/swap, tracing other processes, io_uring. Each returns EPERM.
+DENY_SYSCALLS = """acct add_key bpf clock_adjtime clock_settime create_module delete_module fanotify_init finit_module
+fsconfig fsmount fsopen fspick get_kernel_syms init_module io_uring_enter io_uring_register io_uring_setup ioperm iopl
+kcmp kexec_file_load kexec_load keyctl lookup_dcookie mount mount_setattr move_mount name_to_handle_at nfsservctl
+open_by_handle_at open_tree perf_event_open pivot_root process_vm_readv process_vm_writev ptrace query_module quotactl
+quotactl_fd reboot request_key setns settimeofday stime swapoff swapon sysfs _sysctl syslog umount umount2 unshare
+uselib userfaultfd ustat vhangup vm86 vm86old""".split()
+CLONE_NEW = (0x00020000, 0x02000000, 0x04000000, 0x08000000, 0x10000000, 0x20000000, 0x40000000, 0x00000080)  # NS, CGROUP, UTS, IPC, USER, PID, NET, TIME
+
+
+# ---- the stack: checkpoint (+ mock internet for tests) as plain processes ------------------------------------------
+
+def _secrets() -> dict:
+    """KEY=VALUE lines of .env.secrets, for the checkpoint only (same as docker-compose's env_file)."""
+    f, out = ROOT / ".env.secrets", {}
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def _pidfile(name: str) -> Path:
+    return RUN_DIR / f"{name}.pid"
+
+
+def _alive(name: str) -> bool:
+    try:
+        os.kill(int(_pidfile(name).read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _spawn(name: str, cmd: list, env: dict) -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(ROOT / f"data/{name}.log", "ab")
+    p = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    _pidfile(name).write_text(str(p.pid))
+
+
+def _stop(name: str) -> None:
+    try:
+        pid = int(_pidfile(name).read_text())
+        os.killpg(pid, signal.SIGTERM)
+        for _ in range(50):
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        os.killpg(pid, signal.SIGKILL)
+    except (OSError, ValueError):
+        pass
+    _pidfile(name).unlink(missing_ok=True)
+
+
+def _wait_port(port: int, timeout: float = 60) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            return
+        except OSError:
+            time.sleep(0.2)
+    raise SystemExit(f"heimdall: nothing listening on 127.0.0.1:{port} after {timeout:.0f}s (see data/*.log)")
+
+
+def checkpoint_env(attack: bool = False, supervisor: str = "on") -> dict:
+    env = {**os.environ, **_secrets(), "PYTHONPATH": str(ROOT), "HEIMDALL_CA_OUT": str(CA_CERT),
+           "HEIMDALL_POLICY_SEED": str(ROOT / "checkpoint/policy.json")}
+    env.setdefault("HEIMDALL_DECIDER", "wonder")
+    if attack:  # same as docker-compose.attack.yml: mock internet, fake "real" keys, read-only seed policy
+        from attacks.mock_server import MOCK_KEYS
+        env.update(MOCK_KEYS, HEIMDALL_MOCK_UPSTREAM=f"127.0.0.1:{MOCK_PORT}", HEIMDALL_SUPERVISOR=supervisor,
+                   HEIMDALL_DB=str(ROOT / "data/attack.db"), HEIMDALL_POLICY=str(ROOT / "checkpoint/policy.json"))
+    else:
+        env.setdefault("HEIMDALL_DB", str(ROOT / "data/checkpoint.db"))
+        env.setdefault("HEIMDALL_POLICY", str(ROOT / "data/policy.json"))
+    return env
+
+
+def start_checkpoint(attack: bool = False, supervisor: str = "on") -> None:
+    _stop("checkpoint")
+    mitmdump = VENV / "bin/mitmdump"
+    if not mitmdump.exists():
+        raise SystemExit("heimdall: run ./heimdall setup first (installs mitmproxy)")
+    login = ",".join(f"{a}:{p}" for a, p in LOGINS.items())
+    _spawn("checkpoint", [str(mitmdump), "-s", "checkpoint/addon.py", "--listen-host", "127.0.0.1",
+                          "--listen-port", str(PROXY_PORT), "--set", f"confdir={CONFDIR}", "--set", "body_size_limit=1m",
+                          "--set", "connection_strategy=lazy", "--set", f"proxyauth={login}"],
+           checkpoint_env(attack, supervisor))
+    _wait_port(PROXY_PORT)
+    deadline = time.time() + 30
+    while not CA_CERT.exists() and time.time() < deadline:
+        time.sleep(0.2)
+
+
+def up(attack: bool = False, supervisor: str = "on") -> None:
+    (ROOT / "data").mkdir(exist_ok=True)
+    if attack:
+        _stop("mock")
+        _spawn("mock", [sys.executable, "attacks/mock_server.py"],
+               {**os.environ, "MOCK_UPSTREAM_PORT": str(MOCK_PORT), "MOCK_ADMIN_PORT": str(MOCK_ADMIN_PORT)})
+        _wait_port(MOCK_ADMIN_PORT)
+    start_checkpoint(attack, supervisor)
+
+
+def down() -> None:
+    for name in ("checkpoint", "mock"):
+        _stop(name)
+
+
+def is_up() -> bool:
+    return _alive("checkpoint")
+
+
+# ---- the jail -------------------------------------------------------------------------------------------------------
+
+def _relay(a: socket.socket, b: socket.socket) -> None:
+    def pump(src, dst):
+        try:
+            while data := src.recv(65536):
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for s in (src, dst):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+    threading.Thread(target=pump, args=(a, b), daemon=True).start()
+    threading.Thread(target=pump, args=(b, a), daemon=True).start()
+
+
+def _serve(listener: socket.socket, connect) -> None:
+    def loop():
+        while True:
+            try:
+                c, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                _relay(c, connect())
+            except OSError:
+                c.close()  # checkpoint down: the agent just sees a refused connection (fail closed)
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def _seccomp_fd() -> int:
+    """Compiled BPF for bwrap --seccomp. Needs the distro's libseccomp Python binding (python3-seccomp)."""
+    try:
+        import seccomp
+    except ImportError:
+        raise SystemExit("heimdall: install the seccomp filter library: sudo apt install python3-seccomp")
+    f = seccomp.SyscallFilter(defaction=seccomp.ALLOW)
+    for name in DENY_SYSCALLS:
+        try:
+            f.add_rule(seccomp.ERRNO(errno.EPERM), name)
+        except (RuntimeError, ValueError, OSError):
+            pass  # not a syscall on this architecture
+    for flag in CLONE_NEW:  # no new namespaces through clone() either
+        f.add_rule(seccomp.ERRNO(errno.EPERM), "clone", seccomp.Arg(0, seccomp.MASKED_EQ, flag, flag))
+    try:  # clone3 passes flags in memory a filter can't read: make libc fall back to clone()
+        f.add_rule(seccomp.ERRNO(errno.ENOSYS), "clone3")
+    except (RuntimeError, ValueError, OSError):
+        pass
+    tmp = tempfile.TemporaryFile()
+    f.export_bpf(tmp)
+    tmp.seek(0)
+    fd = os.dup(tmp.fileno())
+    tmp.close()
+    return fd
+
+
+def _placeholders(agent: str) -> dict:
+    """Env vars carrying this agent's placeholder keys, from the policy's placeholder map."""
+    for p in (os.environ.get("HEIMDALL_POLICY"), ROOT / "data/policy.json", ROOT / "checkpoint/policy.json"):
+        if p and Path(p).exists():
+            ph = json.loads(Path(p).read_text()).get("placeholders", {})
+            return {var: name for name, (who, _host, var) in ph.items() if who == agent}
+    return {}
+
+
+def _system_binds() -> list:
+    args = ["--ro-bind", "/usr", "/usr"]
+    for d in ("bin", "sbin", "lib", "lib32", "lib64", "libx32"):
+        p = Path("/") / d
+        if p.is_symlink():
+            args += ["--symlink", os.readlink(p), f"/{d}"]
+        elif p.is_dir():
+            args += ["--ro-bind", str(p), f"/{d}"]
+    # Only what programs need from /etc: libraries, users, time zone, public certs. Not the rest.
+    for e in ("alternatives", "ld.so.cache", "ld.so.conf", "ld.so.conf.d", "localtime", "nsswitch.conf", "passwd",
+              "group", "ssl", "ca-certificates", "mime.types", "os-release"):
+        args += ["--ro-bind-try", f"/etc/{e}", f"/etc/{e}"]
+    return args
+
+
+def jail_argv(agent: str, cmd: list, work: Path, sock: Path, home: Path, ro: list, env: dict, seccomp_fd: int) -> list:
+    argv = ["bwrap", "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
+            "--cap-drop", "ALL", "--hostname", "heimdall", "--clearenv", "--seccomp", str(seccomp_fd),
+            *_system_binds(), "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
+            "--dir", JAIL, "--bind", str(sock), f"{JAIL}/proxy.sock", "--ro-bind", str(CA_CERT), f"{JAIL}/ca.pem",
+            "--ro-bind", str(Path(__file__).resolve()), f"{JAIL}/heimdall",
+            "--bind", str(home), "/home/agent", "--bind", str(work), "/work", "--chdir", "/work"]
+    for src, dst in ro:
+        argv += ["--ro-bind", str(src), dst]
+    argv += ["--remount-ro", "/"]  # after all mounts: / and /etc read-only, like Docker's read_only rootfs
+    for k, v in env.items():
+        argv += ["--setenv", k, v]
+    return argv + ["--", "/usr/bin/python3", f"{JAIL}/heimdall", "_jail-init", "--", *cmd]
+
+
+def jail_env(agent: str, extra: dict) -> dict:
+    proxy = f"http://{agent}:{LOGINS[agent]}@127.0.0.1:{PROXY_PORT}"
+    ca = f"{JAIL}/ca.pem"
+    return {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/agent", "LANG": "C.UTF-8",
+            "TERM": os.environ.get("TERM", "dumb"), "HTTPS_PROXY": proxy, "HTTP_PROXY": proxy,
+            "https_proxy": proxy, "http_proxy": proxy, "SSL_CERT_FILE": ca, "REQUESTS_CA_BUNDLE": ca,
+            "NODE_EXTRA_CA_CERTS": ca, **_placeholders(agent), **extra}
+
+
+def _limits_prefix() -> list:
+    """cgroup limits through the user's systemd. None available: say so, run with rlimits only."""
+    if shutil.which("systemd-run") and subprocess.run(["systemd-run", "--user", "--scope", "-q", "true"],
+                                                      capture_output=True).returncode == 0:
+        return ["systemd-run", "--user", "--scope", "-q", *[f"-p{k}={v}" for k, v in LIMITS.items()]]
+    print("heimdall: no systemd user session; memory/CPU/process caps are OFF (open-file cap still on)", file=sys.stderr)
+    return []
+
+
+def run(agent: str, cmd: list, work: str | None = None, ro: list | None = None, env: dict | None = None,
+        input: str | None = None, capture: bool = False, timeout: float | None = None,
+        limits: bool = True) -> subprocess.CompletedProcess:
+    """Run cmd in a fresh jail for this agent; returns like subprocess.run."""
+    if agent not in LOGINS:
+        raise SystemExit(f"heimdall: unknown agent {agent!r} (known: {', '.join(LOGINS)})")
+    if not CA_CERT.exists() or not is_up():
+        raise SystemExit("heimdall: the checkpoint isn't running (./heimdall up)")
+    work_dir = Path(work or os.getcwd()).resolve()
+    home = STATE / "agents" / agent / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    sock_dir = Path(tempfile.mkdtemp(dir=RUN_DIR, prefix=f"{agent}-"))
+    sock = sock_dir / "proxy.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(sock))
+    listener.listen(128)
+    _serve(listener, lambda: socket.create_connection(("127.0.0.1", PROXY_PORT)))
+    fd = _seccomp_fd()
+    try:
+        argv = jail_argv(agent, cmd, work_dir, sock, home, [(Path(s).resolve(), d) for s, d in (ro or [])],
+                         jail_env(agent, env or {}), fd)
+        prefix = _limits_prefix() if limits else []
+
+        def rlimits():
+            import resource
+            resource.setrlimit(resource.RLIMIT_NOFILE, (NOFILE, NOFILE))
+        return subprocess.run(prefix + argv, input=input, text=True, capture_output=capture, timeout=timeout,
+                              pass_fds=(fd,), preexec_fn=rlimits)
+    finally:
+        os.close(fd)
+        listener.close()
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def _jail_init(cmd: list) -> int:
+    """Inside the jail: serve the agent's proxy port, relayed to the checkpoint socket, then run the agent."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", PROXY_PORT))
+    listener.listen(128)
+
+    def connect():
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(f"{JAIL}/proxy.sock")
+        return s
+    _serve(listener, connect)
+    if not cmd:
+        return 0
+    try:
+        p = subprocess.Popen(cmd)
+    except FileNotFoundError:
+        print(f"heimdall: {cmd[0]}: not found inside the jail (mount it with --ro)", file=sys.stderr)
+        return 127
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, lambda s, _f: p.send_signal(s))
+    return p.wait()
+
+
+# ---- setup / check ----------------------------------------------------------------------------------------------
+
+def check() -> list:
+    """Problems that stop the jail from working here, with the fix for each."""
+    problems = []
+    if not shutil.which("bwrap"):
+        problems.append("bubblewrap missing: sudo apt install bubblewrap")
+    elif subprocess.run(["bwrap", "--unshare-user", "--ro-bind", "/", "/", "true"], capture_output=True).returncode:
+        problems.append("this system blocks unprivileged user namespaces (Ubuntu 23.10+): "
+                        "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0")
+    try:
+        import seccomp  # noqa: F401
+    except ImportError:
+        problems.append("seccomp filter library missing: sudo apt install python3-seccomp")
+    if sys.version_info < (3, 10):
+        problems.append("Python 3.10 or newer needed")
+    return problems
+
+
+def setup() -> None:
+    if not (VENV / "bin/mitmdump").exists():
+        subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
+        subprocess.run([str(VENV / "bin/pip"), "install", "-q", MITMPROXY], check=True)
+    problems = check()
+    for p in problems:
+        print(f"heimdall: {p}", file=sys.stderr)
+    print("heimdall: ready" if not problems else "heimdall: fix the above, then run ./heimdall setup again")
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "_jail-init":
+        rest = sys.argv[2:]
+        sys.exit(_jail_init(rest[1:] if rest[:1] == ["--"] else rest))
+    ap = argparse.ArgumentParser(prog="heimdall", description="Heimdall on plain Linux: run agents in a jail.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("setup", help="install mitmproxy for the checkpoint; check the jail works here")
+    u = sub.add_parser("up", help="start the checkpoint")
+    u.add_argument("--attack", action="store_true", help="test mode: mock internet, fake keys")
+    u.add_argument("--supervisor", choices=("on", "off"), default="on")
+    sub.add_parser("down", help="stop the checkpoint")
+    r = sub.add_parser("run", help="run a command as an agent, in a jail")
+    r.add_argument("--agent", required=True)
+    r.add_argument("--work", help="the agent's writable folder (default: current folder)")
+    r.add_argument("--ro", action="append", default=[], metavar="SRC[:DST]", help="extra read-only folder")
+    r.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    r.add_argument("command", nargs=argparse.REMAINDER)
+    a = ap.parse_args()
+    if a.cmd == "setup":
+        setup()
+    elif a.cmd == "up":
+        up(a.attack, a.supervisor)
+        print(f"heimdall: checkpoint on 127.0.0.1:{PROXY_PORT}")
+    elif a.cmd == "down":
+        down()
+    elif a.cmd == "run":
+        cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
+        if not cmd:
+            ap.error("run: give a command after --")
+        ro = [(s.split(":", 1)[0], s.split(":", 1)[1] if ":" in s else str(Path(s).resolve())) for s in a.ro]
+        env = dict(e.split("=", 1) for e in a.env)
+        sys.exit(run(a.agent, cmd, a.work, ro, env).returncode)
+
+
+if __name__ == "__main__":
+    main()

@@ -13,7 +13,6 @@ import os
 import re
 import sqlite3
 import statistics
-import subprocess
 import sys
 import time
 import urllib.request
@@ -22,7 +21,7 @@ from collections import Counter, defaultdict
 sys.path.insert(0, ".")
 from attacks.mock_server import REAL_KEYS  # noqa: E402
 from proof.rogue import leaked  # noqa: E402
-from proof.run import (ADMIN, AGENT_KEYS, COMPOSE, MUSE_USD_PER_M_IN, MUSE_USD_PER_M_OUT, PLAIN,  # noqa: E402
+from proof.run import (ADMIN, AGENT_KEYS, MUSE_USD_PER_M_IN, MUSE_USD_PER_M_OUT, OUT, agent_exec, stack_begin, stack_end,  # noqa: E402
                        fresh_checkpoint, up)
 
 
@@ -96,18 +95,15 @@ def main() -> None:
             pass
     guard = os.environ.get("HEIMDALL_GUARD_URL", "http://guard:8002")
     print(f"PromptGuard: {guard}", file=sys.stderr)
-    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
-    subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
+    was_up = stack_begin()
     try:
         up("full")
         fresh_checkpoint("full")
         urllib.request.urlopen(urllib.request.Request(ADMIN + "/reset", method="POST"))
-        env = sum((["-e", f"{k}={v}"] for k, v in AGENT_KEYS["full"].items()), [])
         print(f"load: {a.rate:g} req/s for {a.seconds:g} s, {a.attack_pct:g}% attacks, {a.workers} workers", file=sys.stderr, flush=True)
         t0 = time.time()
-        p = subprocess.run(COMPOSE + ["exec", "-T", *env, "coder", "python", "/attacks/load.py",
-                                      str(a.rate), str(a.seconds), str(a.attack_pct), str(a.workers)],
-                           capture_output=True, text=True, timeout=a.seconds * 5 + 120)
+        p = agent_exec(["python3", "/attacks/load.py", str(a.rate), str(a.seconds), str(a.attack_pct), str(a.workers)],
+                       AGENT_KEYS["full"], timeout=a.seconds * 5 + 120)
         secs = time.time() - t0
         seen = "\n".join(x["text"] for x in json.load(urllib.request.urlopen(ADMIN)) if x["visible"])
         out = {"target_rps": a.rate, "seconds": a.seconds, "attack_pct": a.attack_pct, "guard": guard, **score(p.stdout.splitlines(), seen, secs),
@@ -115,12 +111,9 @@ def main() -> None:
         if p.returncode:
             out["generator_error"] = p.stderr[-500:]
     finally:
-        subprocess.run(COMPOSE + ["down"], capture_output=True)
-        if was_up:
-            print("restarting your normal stack", file=sys.stderr)
-            subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
-    os.makedirs("proof/out", exist_ok=True)
-    with open("proof/out/load.json", "w") as f:
+        stack_end(was_up)
+    os.makedirs(OUT, exist_ok=True)
+    with open(f"{OUT}/load.json", "w") as f:
         json.dump(out, f, indent=1)
     print(json.dumps(out, indent=1))
 

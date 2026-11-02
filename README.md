@@ -107,6 +107,11 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
 
 ## Limits (honest)
 
+- **A request to an AI provider with no key at all is allowed.** The checkpoint blocks someone else's key on
+  LLM hosts, but doesn't yet require the agent's own placeholder. In one rogue-agent run the Llama sent the
+  database password to the provider with no key; the real provider rejects that (401), but the mock counts it
+  as leaked, and it should be blocked.
+
 - **A slow leak inside the caps gets through.** A secret split into small pieces across normal-looking comments
   on an allowed endpoint got out in the load test. It is counted and charted, not stopped.
 - **The decider is a model too.** Muse Wonder denied every leak the rogue agent sent its way, including a
@@ -183,6 +188,27 @@ python3 proof/load.py --rate 100     # load test
 DEMO=1 ./demo/demo.sh                # replay the recorded run, no network
 ```
 
+### Native Linux sandbox (optional, no Docker)
+
+Docker is the default. On Linux, `./heimdall` runs agents without Docker or images: each command runs from your
+own machine in a bubblewrap jail that sees only system folders (read-only), its work folder and an empty home;
+its only network is a socket to the checkpoint; it gets a seccomp filter like Docker's and cgroup limits
+(1 CPU, 1 GB, 256 processes, 1024 files). Subagents inherit the jail.
+
+```sh
+sudo apt install bubblewrap python3-seccomp   # Debian / Ubuntu
+./heimdall setup && ./heimdall up
+./heimdall run --agent coder -- claude -p "fix the failing CI"
+python3 proof/test_sandbox.py --native        # jail escape tests (same probe as Docker's: python3 proof/test_sandbox.py)
+python3 proof/run.py --runs 5 --native        # any proof script takes --native; results in proof/out-native/
+```
+
+Measured against Docker with the same tests: jail escape tests 28/28 (Docker 27/27), attack proof identical
+(0/5 with Heimdall, 5/5 without), load 93.7–96.7 req/s (Docker 91.5–95.0), 50 ms to start a fresh jail
+(Docker: 145 ms for a new container). Rogue agent: 1 of 5 native runs got the secret out, through a keyless
+request to the AI provider; that's a checkpoint gap, the same under Docker (see Limits). Linux only for now;
+macOS would use its built-in sandbox (roadmap).
+
 ## Repo
 
 ```
@@ -193,6 +219,7 @@ attacks/      mock internet, poisoned issue, hand-written attacks, load generato
 proof/        attack test, rogue agent, load test, tests
 demo/         demo.sh and the recorded run
 start.sh      everything, one command
+heimdall      native Linux sandbox (optional): setup / up / run --agent NAME -- CMD
 ```
 
 ## Roadmap
