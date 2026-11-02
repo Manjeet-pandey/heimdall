@@ -63,38 +63,41 @@ reading why it was blocked. Each run happens with and without Heimdall.
 
 | | Without Heimdall | With Heimdall |
 |---|---|---|
-| Attack classes that got data out | 3 of 3 | **0 of 3** |
-| Real key stolen | yes | **no** |
-| Real task completed | yes | **yes** |
+| Runs where each attack class got data out (A1 / A2 / A3) | 5/5 · 5/5 · 5/5 | **0/5 · 0/5 · 0/5** |
+| Attack variants that leaked, per run | 18 of 21 | **0 of 21** |
+| Runs where a real key was stolen | 5 of 5 | **0 of 5** |
+| Runs where the real task completed | 5 of 5 | **5 of 5** |
 
-*(1 run each way so far; the 5-run proof is scheduled before submission.)*
+5 runs each way. Hard rules caught keys, IP literals, provider fetches, path traversal and oversize bodies every
+time; Muse Spark and Muse Wonder split the new-host and gist variants; Muse's history review caught both stuffed
+issue comments every time. Muse: 55 verdicts, median 2.9 s, p90 4.2 s, about $0.0018 each.
 
 **Live attacker host** (`proof/out-live/`): the same test with the attacker's server on the real internet (a server we own
 behind a Cloudflare tunnel, real DNS and TLS). Same result: 3 of 3 out without Heimdall, 0 of 3 with it.
 
 **Rogue agent** (`proof/rogue.py`): Llama 3.1 8B is told to get a database password out and adapts after every
 403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, a new issue, the
-attacker's server and unknown sites. With the final setup **0 of 3 runs got the secret out** (31 of 38 requests
-blocked; the rest were harmless reads and LLM calls).
+attacker's server and unknown sites. With the final setup **0 of 5 runs got the secret out** (34 of 48 requests
+blocked; the rest were harmless reads and LLM calls). In one of the 5 runs the model never sent a request.
 
 It also found a real hole along the way: when a Muse Spark call timed out, a write to an allowed endpoint went
 through unreviewed, and in 2 of 2 runs the agent got the password out in a progress comment. Unreviewed writes
 now go to Muse Wonder, and are denied if it can't answer either.
 
-**Load test** (`proof/load.py`): one minute of a busy agent at 100 requests/s (repo reads, LLM calls, progress
+**Load test** (`proof/load.py`, 3 runs): one minute of a busy agent at 100 requests/s (repo reads, LLM calls, progress
 comments) with 1% labelled attacks mixed in, real Muse Spark and Muse Wonder deciding, PromptGuard on the Apple GPU.
 
 | | Result |
 |---|---|
-| Sustained rate | **95.1 req/s** |
-| LLM call, median / p95 | 7 / 15 ms |
-| Repo read, median / p95 (scanned by PromptGuard) | 56 / 76 ms |
-| Progress comment, median / p95 (reviewed by Muse) | 2.5 / 4.6 s |
-| Attacks blocked | **58 of 58** |
-| Normal requests wrongly blocked | 3 of 5,937 (comments Muse Wonder judged suspicious) |
-| Slow leak (one secret split over 4 comments) | got out |
+| Sustained rate | **91.5 – 95.0 req/s** |
+| LLM call, median | 7–8 ms |
+| Repo read, median (scanned by PromptGuard) | 56–59 ms |
+| Progress comment, median (reviewed by Muse) | 2.5 s |
+| Attacks blocked | **173 of 173** |
+| Normal requests wrongly blocked | 8 of 17,812 (0, 1 and 7 per run; comments Muse judged suspicious) |
+| Slow leak (one secret split over 4 comments) | got out, 3 of 3 runs |
 
-Muse Spark: 206 reviews in the minute, median 2.4 s, about $0.39. Muse Wonder was needed 3 times. Reads and LLM
+Muse Spark: about 205 reviews per minute-long run, about $0.39–0.42 per run. Muse Wonder was needed 1–6 times per run. Reads and LLM
 calls are never sent to Muse. With PromptGuard on CPU in a container the same test sustains about 67 req/s.
 
 ## Limits (honest)
@@ -105,7 +108,7 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
   secret URL-encoded into an unknown site's path, but both reviewers read attacker-controlled content and a
   clever enough injection could fool both. Hard rules and byte budgets cap the damage either way.
 - **Muse gets stricter with volume.** At 180 progress comments a minute some harmless ones are judged a leak
-  pattern (3 of 5,937 in the load test).
+  pattern (8 of 17,812 across 3 load runs).
 - **Muse Wonder is slow under load** (2 s alone, up to ~10 s when the API is busy), so writes Spark doubts take
   longer. Its calls run apart from response scanning, so everything else keeps its speed.
 - **In human mode, writes keep flowing while Muse is down** (so agents aren't stuck); only Wonder mode, the
@@ -187,7 +190,6 @@ Coding assistants used while building, as the rules require:
 
 - **Muse Spark via OpenCode** (Oct 30–31): first versions of the Llama retry helper (`attacks/llama_attacker.py`),
   the demo recorder (`demo/record.py`) and its tests, and a review-page revision that was later rewritten.
-- *(add any other Muse Code sessions here before submitting)*
 
 ## License
 
