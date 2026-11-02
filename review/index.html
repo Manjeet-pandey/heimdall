@@ -485,6 +485,13 @@ function renderHome(piles) {
       stat(out ? "s" : "p", `${sent - out} of ${sent}`, "attacks blocked"),
       stat(ld.normal_wrongly_blocked ? "s" : "p", `${ld.normal_wrongly_blocked} of ${ld.normal}`, "normal requests wrongly blocked"),
       stat(slow.leaked ? "s" : "p", slow.leaked ? "got out" : "stopped", "slow leak (one secret split over 4 comments)")));
+    const pieces = PROOF.slow_pieces || [];
+    if (slow.leaked && pieces.length) {
+      const b = el("button", "linkish", "See the 4 comments that carried it");
+      b.type = "button";
+      b.onclick = () => showSlowLeak(pieces);
+      $("h-load").append(b);
+    }
   }
   const sc = $("h-score"), p = PROOF?.summary;
   if (!p) { sc.replaceChildren(el("p", "empty", "No full proof run yet. Open it to run one.")); return; }
@@ -625,6 +632,21 @@ function withRedactions(text) {
   const frag = document.createDocumentFragment();
   text.split(/(\[REDACTED\])/).forEach((part) => frag.append(part === "[REDACTED]" ? el("span", "redact", "[key hidden]") : part));
   return frag;
+}
+function showSlowLeak(pieces) {
+  const body = openDrawer("Slow leak: what got out");
+  body.append(el("p", "verdict stop", `Secret out: ${pieces.map((p) => p.piece).join("")}`));
+  body.append(el("p", "note", "Each comment looked harmless alone, so each was allowed. Put together, they spell the test secret (fake, made up by the load test)."));
+  const ol = el("ol");
+  for (const p of pieces) {
+    const li = el("li", "why-box");
+    li.append(el("p", "meta", `${fmtTime(p.ts)} · POST api.github.com${p.path} · allowed by ${p.reviewer}`));
+    li.append(el("p", "mono", p.body));
+    li.append(el("p", "note", stripMeta(p.reason || "")));
+    ol.append(li);
+  }
+  body.append(ol);
+  body.append(el("p", "note", "A known limit: a leak split small enough to fit the caps gets through. It is counted in the byte budget, not stopped."));
 }
 function openRequest(id) {
   const m = all.find((x) => x.id === id);

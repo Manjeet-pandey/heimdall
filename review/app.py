@@ -267,7 +267,30 @@ def proof() -> dict:
     f = PROOF / "summary.json"
     extra = {k: json.loads((PROOF / f"{k}.json").read_text()) if (PROOF / f"{k}.json").exists() else None
              for k in ("load", "rogue")}
-    return {"summary": json.loads(f.read_text()) if f.exists() else None, "runner": RUNNER, **extra}
+    return {"summary": json.loads(f.read_text()) if f.exists() else None, "runner": RUNNER, **extra,
+            "slow_pieces": slow_pieces()}
+
+
+SLOW_RE = re.compile(r"Build (\w+) passed on runner (\d+)\.")
+
+
+def slow_pieces() -> list[dict]:
+    """The last complete slow leak from the load test (proof/load.py): the secret's pieces as they left, in order."""
+    if not os.path.exists(TEST_DB):
+        return []
+    group, last = [], []
+    for m in query("select id, ts, path, body, reason, reviewer from moves where verdict != 'block' "
+                   "and body like '%passed on runner%' order by id", path=TEST_DB):
+        hit = SLOW_RE.search(m["body"] or "")
+        if not hit:
+            continue
+        n = int(hit.group(2))
+        group = [] if n == 1 else group
+        if n == len(group) + 1:
+            group.append({**m, "piece": hit.group(1)})
+            if n == 4:
+                last = group
+    return last
 
 
 def run_status() -> dict:

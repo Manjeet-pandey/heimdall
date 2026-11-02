@@ -105,6 +105,13 @@ check("test-src-summary", app.summary(app.source("test"))["stopped"], 1)
 check("test-src-decide", post("/api/decide", {"id": tesc, "decision": "allow", "src": "test"})[0], 200)
 check("test-decision-separate", app.decisions(app.TEST_DB).get(tesc, {}).get("decision"), "allow")
 
+# Slow leak: the last complete group of 4 allowed pieces, in order; a blocked or unfinished group doesn't count.
+for part, n, verdict in [("aaa", 1, "allow"), ("bbb", 2, "block"), ("abc", 1, "allow"), ("def", 2, "allow"),
+                         ("ghi", 3, "allow"), ("jkl", 4, "allow"), ("zzz", 1, "allow")]:
+    log(tdb, "coder", "POST", "api.github.com", f"/repos/me/proj/issues/{4 + n}/comments", "",
+        json.dumps({"body": f"Build {part} passed on runner {n}."}), "", 100, verdict, "allow: fine", "muse-history")
+check("slow-pieces", [p["piece"] for p in app.slow_pieces()], ["abc", "def", "ghi", "jkl"])
+
 srv.shutdown()
 shutil.rmtree(tmp)
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
