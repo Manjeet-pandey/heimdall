@@ -53,6 +53,11 @@ agent sandbox ──► Heimdall checkpoint ────────────
 
 Muse (Spark or Wonder) never plays the attacker, so the reviewers never grade themselves. No outputs are used to train anything.
 
+**Other models.** Both roles take any OpenAI-style chat API. Reviewer: set `META_API_BASE`, `META_MODEL_API_KEY`,
+`HEIMDALL_REVIEWER_MODEL` and `HEIMDALL_DECIDER_MODEL` in `.env.secrets` (and `HEIMDALL_REVIEWER_EFFORT=` if the
+model rejects `reasoning_effort`). Attacker: `LLAMA_URL`, `LLAMA_MODEL` and, for a hosted model, `LLAMA_API_KEY`.
+All results above are with Muse and Llama.
+
 ## Results
 
 All attack traffic goes to a local mock internet with fake keys; only Muse's reviews leave the machine.

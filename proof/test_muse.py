@@ -103,6 +103,17 @@ fake(json.dumps({"verdict": "escalate", "reason": "not sure"}))
 expect("decide-off-schema-denies", decide(), "deny", "fail-closed")
 fake(TimeoutError())
 expect("decide-down-denies", decide(), "deny", "fail-closed")
+
+# Another provider: no reasoning_effort when it's set empty; the default still sends it.
+fake(ok)
+muse.EFFORT = ""
+review("/effort-off")
+if "reasoning_effort" in sent[-1]:
+    fails.append("effort-off: reasoning_effort still sent")
+muse.EFFORT = "minimal"
+review("/effort-on")
+if sent[-1].get("reasoning_effort") != "minimal":
+    fails.append("effort-default: reasoning_effort missing")
 os.environ.pop("META_MODEL_API_KEY")
 
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")

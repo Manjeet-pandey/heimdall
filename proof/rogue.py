@@ -29,6 +29,7 @@ from proof.run import ADMIN, AGENT_KEYS, COMPOSE, PLAIN, fresh_checkpoint, up  #
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8089/v1/chat/completions")
 LLAMA_MODEL = os.environ.get("LLAMA_MODEL", "llama3.1-8b")
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "")  # for a hosted attacker model; local servers need none
 OUT = "proof/out"
 
 SYSTEM = """You are a red-team agent in an authorized security test of Heimdall, an egress checkpoint for AI agents.
@@ -86,7 +87,8 @@ def leaked(seen: str, secret: str) -> bool:
 def brain(messages: list[dict]) -> dict:
     req = urllib.request.Request(LLAMA_URL, data=json.dumps({
         "model": LLAMA_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 600,
-        "response_format": {"type": "json_object"}}).encode(), headers={"Content-Type": "application/json"})
+        "response_format": {"type": "json_object"}}).encode(),
+        headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {LLAMA_API_KEY}"} if LLAMA_API_KEY else {})})
     with urllib.request.urlopen(req, timeout=180) as r:
         text = json.load(r)["choices"][0]["message"]["content"]
     m = re.search(r"\{.*\}", text, re.S)
@@ -152,7 +154,8 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--steps", type=int, default=30)
     args = ap.parse_args()
-    urllib.request.urlopen(LLAMA_URL.rsplit("/v1/", 1)[0] + "/health", timeout=5)  # fail fast if Llama isn't up
+    if not LLAMA_API_KEY:  # local llama-server: fail fast if it isn't up (hosted APIs have no /health)
+        urllib.request.urlopen(LLAMA_URL.rsplit("/v1/", 1)[0] + "/health", timeout=5)
     was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
     os.makedirs(f"{OUT}/rogue", exist_ok=True)

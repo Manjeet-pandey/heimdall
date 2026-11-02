@@ -33,7 +33,9 @@ def path_template(path: str) -> str:
 
 
 API_URL = os.environ.get("META_API_BASE", "https://api.meta.ai/v1") + "/chat/completions"
-MODEL = "muse-spark-1.3"  # Standard tier: Meta doesn't train on it. Never the -contributor ID.
+# Any OpenAI-style chat API works: set META_API_BASE, META_MODEL_API_KEY and these in .env.secrets.
+MODEL = os.environ.get("HEIMDALL_REVIEWER_MODEL", "muse-spark-1.3")  # Standard tier: no training. Never -contributor.
+EFFORT = os.environ.get("HEIMDALL_REVIEWER_EFFORT", "minimal")  # empty = don't send (models that reject it)
 TIMEOUT_S = 8
 VERDICTS = ("deny", "escalate", "allow-with-budget")
 SYSTEM = (
@@ -89,11 +91,13 @@ def _verdict(system: str, user: str, api_key: str, model: str = "", schema: dict
         "model": model or MODEL,
         # Budget includes reasoning tokens: at 300, Muse spent them all thinking and returned no answer.
         # minimal gave the same verdicts as low in testing, ~1.5s vs ~2.2s.
-        "reasoning_effort": "minimal",
+        "reasoning_effort": EFFORT,
         "max_completion_tokens": 2000,
         "response_format": schema or SCHEMA,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
+    if not EFFORT:
+        del payload["reasoning_effort"]
     t0 = time.monotonic()
     try:
         resp = _post(payload, api_key, timeout)
