@@ -1,6 +1,8 @@
 # sandbox + checkpoint
 # Agents: no external route. Only checkpoint reaches the internet.
 networks:
+  # One internal network per agent, shared only with the checkpoint. A second agent gets its own (e.g. writernet),
+  # never this one: agents on one network could talk to each other directly and skip the checkpoint.
   agentnet:
     internal: true
   egress:
@@ -53,6 +55,12 @@ services:
     # ponytail: narrows the channel, doesn't close it; separate VMs per agent do (roadmap).
     cpuset: "${CODER_CPUSET:-0}"
     cpus: 1
+    # A runaway or hostile agent can't take the machine down with it: RAM, process count (fork bombs), open files.
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 256
+    ulimits: { nofile: 1024 }
+    init: true  # reaps exited processes; without it zombies pile up against pids_limit and lock the agent out
     volumes:
       - ./agent-work/coder:/work:rw
       - ./notes:/notes:ro

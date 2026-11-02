@@ -127,6 +127,18 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
   could signal through CPU timing or cache use, and a less-restricted agent could then send what it learned out
   through its own allowed routes (still inside its byte budgets). Each agent gets its own CPU core and a CPU cap,
   which slows this down but doesn't stop it; separate VMs per agent would.
+- **Agents can try to hand work to each other.** Heimdall closes the direct routes: each agent's internal
+  network holds only itself and the checkpoint (agents on one network could talk directly), each container
+  has its own process and shared-memory space, and shared folders are read-only. What's left: two agents
+  can use an allowed site as a mailbox (A posts a comment, B reads it); both moves go through the checkpoint
+  and the history review, but harmless-looking messages can pass. Files an agent writes to its work folder
+  can carry instructions for whoever opens them next, agent or human; Heimdall doesn't read files.
+- **Resource limits, not a fair scheduler.** Each agent gets 1 CPU core, 1 GB RAM (no swap), 256 processes
+  and 1,024 open files, and exited processes are cleaned up so a fork bomb doesn't lock it out for good.
+  Not limited yet: disk use in its work folder, and requests per second. Muse reviews a request before its
+  byte budget is checked, and blocked requests don't count against the budget, so an agent flooding unknown
+  requests or writes can run up Muse calls (about $0.002 each) with no cap. A per-agent rate and spend
+  limit is the fix.
 - All test traffic is synthetic. GitHub and the LLM provider are mocked; in the live run the attacker's host is a
   real public server we own behind a Cloudflare tunnel, and it only ever receives fake keys.
 
