@@ -37,6 +37,10 @@ s = json.load(open('demo/recorded/summary.json'))
 assert s['canaries_leaked'] == [], 'canary leaked in recording'
 blob = open('demo/recorded/transcript.txt').read() + open('demo/recorded/moves.jsonl').read()
 assert 'sk-e2e-not-real' not in blob and 'ghp_e2e_not_real' not in blob, 'secret in recording'
+assert s.get('rogue', {}).get('leaked', 0) == 0, 'rogue run leaked in recording'
+assert s.get('load', {}).get('attacks_leaked', 0) == 0, 'load attack leaked in recording'
+for k in ('rogue', 'load'):
+    if k not in s: print('check WARN: no %s section in recording (run the proofs, then ./demo.sh)' % k)
 print('check OK: demo recording (%d steps, %d/%d attack steps blocked, muse_live=%s)' % (
     s['steps'], s['attack_blocked'], s['attack_steps'], s['muse_live']))
 " || { echo "check FAIL: demo/recorded invalid"; exit 1; }

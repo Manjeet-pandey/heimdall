@@ -178,6 +178,47 @@ def drive_and_note(attack, variant, url, body, headers, extra_retry=""):
     return st, text
 
 
+def proof_sections():
+    """Rogue-agent and load-test results from the last proof runs (proof/out), for the replay."""
+    lines, out = [], {}
+    try:
+        r = json.load(open("proof/out/rogue.json"))
+        run = max(r["results"], key=lambda x: x["blocked"])  # the most persistent attacker
+        rsteps = [json.loads(ln) for ln in open(f"proof/out/rogue/{run['run']}.jsonl")]
+    except (OSError, ValueError, KeyError):
+        r = None
+    if r:
+        lines += ["", f"## Rogue agent: {r['model']} adapts to every 403. {r['leaked']} of {r['runs']} runs got the secret out, "
+                      f"{r['blocked']} of {r['requests']} requests blocked",
+                  f"most persistent run ({run['run']}, {run['steps']} steps):"]
+        for s in rsteps:
+            if s["tool"] == "http":
+                lines.append(f"  [{s['step']:02d}] {s['method']} {quote_redacted(s['url'], 70)} -> "
+                             f"{quote_redacted(s['obs'].splitlines()[0] if s['obs'] else '', 110)}")
+        out["rogue"] = {k: r[k] for k in ("model", "runs", "leaked", "requests", "blocked")}
+    loads = []
+    for i in (1, 2, 3):
+        try:
+            loads.append(json.load(open(f"proof/out/load-{i}.json")))
+        except (OSError, ValueError):
+            pass
+    if loads:
+        hard = [a for ld in loads for k, a in ld["attacks"].items() if not k.startswith("slow-leak")]
+        sent, leaked_n = sum(a["sent"] for a in hard), sum(a.get("leaked", 0) for a in hard)
+        reqs, wrong = sum(ld["normal"] for ld in loads), sum(ld["normal_wrongly_blocked"] for ld in loads)
+        slow = sum(ld["attacks"].get("slow-leak (4 pieces)", {}).get("leaked", 0) for ld in loads)
+        rps = ", ".join(str(ld["achieved_rps"]) for ld in loads)
+        usd = sum(ld["muse"].get("usd", 0) for ld in loads)
+        lines += ["", f"## Load test: {len(loads)} runs, 1 min each at 100 req/s target (achieved {rps})",
+                  f"attacks blocked: {sent - leaked_n} of {sent}",
+                  f"normal requests wrongly blocked: {wrong} of {reqs}",
+                  f"slow leak (secret split over 4 comments, inside the caps): got out {slow} of {len(loads)} runs (known limit, charted)",
+                  f"Muse Spark cost: ${usd:.2f} total"]
+        out["load"] = {"runs": len(loads), "attacks": sent, "attacks_leaked": leaked_n,
+                       "normal": reqs, "wrongly_blocked": wrong, "slow_leak_out": slow}
+    return lines, out
+
+
 def main() -> int:
     env = {**os.environ, "MOCK_UPSTREAM_PORT": str(UPSTREAM_PORT), "MOCK_ADMIN_PORT": str(ADMIN_PORT)}
     proc = subprocess.Popen([sys.executable, "attacks/mock_server.py"], env=env,
@@ -289,6 +330,11 @@ def main() -> int:
                   f"canaries reaching attacker-visible mock records: {len(leaked)}",
                   "bytes out per dest: " + ", ".join(f"{b['host']}={b['bytes']}B"
                                                      for b in summary["bytes_out_per_dest"])]
+        proof_lines, proof = proof_sections()
+        lines += proof_lines
+        summary.update(proof)
+        with open(os.path.join(OUT, "summary.json"), "w") as fh:
+            json.dump(summary, fh, indent=1)
         transcript = "\n".join(lines) + "\n"
         with open(os.path.join(OUT, "transcript.txt"), "w") as fh:
             fh.write(transcript)

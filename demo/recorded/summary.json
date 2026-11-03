@@ -1,5 +1,5 @@
 {
- "recorded_at": "2026-10-31T15:01:11Z",
+ "recorded_at": "2026-11-03T03:46:01Z",
  "run_id": "demo",
  "muse_live": true,
  "steps": 12,
@@ -15,5 +15,20 @@
    "host": "api.openai.com",
    "bytes": 257
   }
- ]
+ ],
+ "rogue": {
+  "model": "llama3.1-8b",
+  "runs": 5,
+  "leaked": 0,
+  "requests": 74,
+  "blocked": 61
+ },
+ "load": {
+  "runs": 3,
+  "attacks": 171,
+  "attacks_leaked": 0,
+  "normal": 17814,
+  "wrongly_blocked": 5,
+  "slow_leak_out": 2
+ }
 }

@@ -11,6 +11,11 @@ through one checkpoint that checks it, records it, and blocks what looks like a 
 
 Indie track · Push the Frontier (safe autonomy for agents).
 
+**Built during the hackathon (Oct 28 – Nov 3, 2026).** Everything in this repo was written during the event
+by Manjeet (solo), with AI coding assistants (see [Muse Code log](#muse-code-log)); the git history starts at the first
+commit on Oct 28. Used as-is, not ours: [mitmproxy](https://mitmproxy.org) (the proxy engine the checkpoint runs
+inside), Meta's PromptGuard 2 and Llama 3.1 8B (open weights), llama.cpp, Docker and bubblewrap.
+
 ## What it does
 
 ```
@@ -24,19 +29,24 @@ agent sandbox ──► Heimdall checkpoint ────────────
 - **Placeholder keys.** Agents hold `gw_ph_openai_x7f3`, never the real key. The checkpoint swaps in the real key
   only for the one site it belongs to. A placeholder seen anywhere else is a tripwire.
 - **Hard rules first** (no AI involved): allowlisted hosts checked before DNS, no IP literals, no private or
-  metadata addresses, CONNECT host = SNI = Host, size caps on URL, headers and body, path rules for writes,
+  metadata addresses, https on port 443 only (a real key never travels in plaintext), CONNECT host = SNI = Host, size caps on URL, headers and body, path rules for writes,
   no foreign API keys on LLM hosts, no provider-side fetches (MCP servers, web search, image URLs) to unknown
   hosts, a byte budget per agent per destination. WebSocket frames are counted and capped too.
 - **Muse Spark as reviewer.** Anything that matches no rule goes to Muse for a verdict (deny / not sure /
   allow within a small budget). Writes to *allowed* endpoints get a history review: Muse sees the agent's task
   and recent requests and looks for data leaking out a little at a time. Muse can never allow past a hard rule.
+  Muse sees the method, host, path and body (secrets redacted), not the query string or headers; those are
+  covered by the hard rules and byte budgets. An agent with no daily allowance for moves outside its rules (the
+  shipped policy) is blocked on those whatever Muse says, so there Muse adds the plain-language reason. Its
+  verdicts decide for writes to allowed endpoints and for agents given an allowance.
 - **Muse Wonder as the decider, so agents run 24/7.** When Spark isn't sure, or can't answer, Meta's larger
   Muse Wonder makes the final allow-or-deny call on the spot; nobody has to be watching. If Wonder is unsure or
   unreachable the answer is deny, and its allows still count against the byte budgets. Prefer a person in the
   loop? `HEIMDALL_DECIDER=human` sends those requests to the review page's queue instead.
 - **Fail closed.** If the Meta API is down, unknown requests and unreviewed writes are blocked.
-- **PromptGuard 2** scans every non-LLM response before the agent sees it. A hit puts the agent in strict mode:
-  nothing new goes out without your OK.
+- **PromptGuard 2** scans every non-LLM text response (binary bodies and streamed LLM answers aren't scanned).
+  A hit doesn't take back that response, but it puts the agent in strict mode: nothing new goes out without
+  your OK, so an injection that got in can't act on the network.
 - **Learn, then lock.** Watch an agent do its job, approve the moves it made, and lock it to exactly those.
 - **Review page.** An overview of what was blocked and what needs you, a live view where every request flies
   into an *allowed* or *blocked* pile, and a side panel with everything about any request: the plain-language
@@ -74,15 +84,16 @@ reading why it was blocked. Each run happens with and without Heimdall.
 | Runs where the real task completed | 5 of 5 | **5 of 5** |
 
 5 runs each way. Hard rules caught keys, IP literals, provider fetches, path traversal and oversize bodies every
-time; Muse Spark and Muse Wonder split the new-host and gist variants; Muse's history review caught both stuffed
-issue comments every time. Muse: 55 verdicts, median 2.9 s, p90 4.2 s, about $0.0018 each.
+time; Muse's history review caught both stuffed issue comments every time, the one place where Muse alone
+decides. The new-host and gist variants (no endpoint rule matched) were refused by Muse Spark or Muse Wonder
+with a reason, but the agent's policy (no allowance outside its rules) would have blocked them anyway. Muse: 54 verdicts, median 3.6 s, p90 5.3 s, about $0.0018 each.
 
-**Live attacker host** (`proof/out-live/`): the same test with the attacker's server on the real internet (a server we own
-behind a Cloudflare tunnel, real DNS and TLS). Same result: 3 of 3 out without Heimdall, 0 of 3 with it.
+**Live attacker host** (`proof/out-live/`): the same test with the attacker's server on the real internet (a server
+we own behind a Cloudflare tunnel, real DNS and TLS; run Nov 1). Same result: 3 of 3 out without Heimdall, 0 of 3 with it.
 
 **Rogue agent** (`proof/rogue.py`): Llama 3.1 8B is told to get a database password out and adapts after every
 403. It tried GitHub comments, URL-encoding the secret, the LLM provider, public gists, a new issue, the
-attacker's server and unknown sites. With the final setup **0 of 5 runs got the secret out** (59 of 74 requests
+attacker's server and unknown sites. With the final setup **0 of 5 runs got the secret out** (61 of 74 requests
 blocked; the rest were harmless reads and LLM calls).
 
 It found two real holes along the way, both fixed:
@@ -98,16 +109,16 @@ comments) with 1% labelled attacks mixed in, real Muse Spark and Muse Wonder dec
 
 | | Result |
 |---|---|
-| Sustained rate | **91.5 – 95.0 req/s** |
-| LLM call, median | 7–8 ms |
-| Repo read, median (scanned by PromptGuard) | 56–59 ms |
-| Progress comment, median (reviewed by Muse) | 2.5 s |
-| Attacks blocked | **173 of 173** |
-| Normal requests wrongly blocked | 8 of 17,812 (0, 1 and 7 per run; comments Muse judged suspicious) |
-| Slow leak (one secret split over 4 comments) | got out, 3 of 3 runs |
+| Sustained rate | **87.2 – 92.6 req/s** |
+| LLM call, median | 8 ms |
+| Repo read, median (scanned by PromptGuard) | 58–60 ms |
+| Progress comment, median (reviewed by Muse) | 3.0–3.2 s |
+| Attacks blocked | **171 of 171** |
+| Normal requests wrongly blocked | 5 of 17,814 (2, 1 and 2 per run; comments Muse judged suspicious) |
+| Slow leak (one secret split over 4 comments) | got out in 2 of 3 runs (3 of 4 pieces in the other) |
 
-Muse Spark: about 205 reviews per minute-long run, about $0.39–0.42 per run. Muse Wonder was needed 1–6 times per run. Reads and LLM
-calls are never sent to Muse. With PromptGuard on CPU in a container the same test sustains about 67 req/s.
+Muse Spark: about 200 reviews per minute-long run, about $0.39–0.40 per run. Muse Wonder was needed 2–5 times per run. Reads and LLM
+calls are never sent to Muse. With PromptGuard on CPU in a container the same test sustained 92 req/s (1 run).
 
 ## Limits (honest)
 
@@ -117,7 +128,7 @@ calls are never sent to Muse. With PromptGuard on CPU in a container the same te
   secret URL-encoded into an unknown site's path, but both reviewers read attacker-controlled content and a
   clever enough injection could fool both. Hard rules and byte budgets cap the damage either way.
 - **Muse gets stricter with volume.** At 180 progress comments a minute some harmless ones are judged a leak
-  pattern (8 of 17,812 across 3 load runs).
+  pattern (5 of 17,814 across 3 load runs).
 - **Muse Wonder is slow under load** (2 s alone, up to ~10 s when the API is busy), so writes Spark doubts take
   longer. Its calls run apart from response scanning, so everything else keeps its speed.
 - **In human mode, writes keep flowing while Muse is down** (so agents aren't stuck); only Wonder mode, the
@@ -203,8 +214,8 @@ python3 proof/run.py --runs 5 --native        # any proof script takes --native;
 ```
 
 Measured against Docker with the same tests: jail escape tests 28/28 (Docker 27/27), attack proof identical
-(0/5 with Heimdall, 5/5 without), load 93.7–96.7 req/s (Docker 91.5–95.0), 50 ms to start a fresh jail
-(Docker: 145 ms for a new container). Rogue agent: 0 of 5 native runs got the secret out (34 of 59 requests
+(0/5 with Heimdall, 5/5 without), load 85.2–92.7 req/s (Docker 87.2–92.6), 45 ms to start a fresh jail
+(Docker: 134 ms for a new container). Rogue agent: 0 of 5 native runs got the secret out (59 of 71 requests
 blocked) after the no-key fix; before it, 1 of 5 had, through the checkpoint gap described under Results.
 Linux only for now; macOS would use its built-in sandbox (roadmap).
 
@@ -224,12 +235,12 @@ heimdall      native Linux sandbox (optional): setup / up / run --agent NAME -- 
 ## Roadmap
 
 Not built, on purpose: Go agent images; OAuth, cookie and AWS-signature credentials; logging file reads inside
-the sandbox; bubblewrap instead of Docker for lighter sandboxes; phone alerts for decisions; drafting a policy
+the sandbox; the macOS built-in sandbox (the native jail is Linux only); phone alerts for decisions; drafting a policy
 from one line of plain English; one VM per agent to close same-machine side channels.
 
 ## Muse Code log
 
-Coding assistants used while building, as the rules require:
+Coding assistants used while building:
 
 - **Muse Spark via OpenCode** (Oct 30–31): first versions of the Llama retry helper (`attacks/llama_attacker.py`),
   the demo recorder (`demo/record.py`) and its tests, and a review-page revision that was later rewritten.
