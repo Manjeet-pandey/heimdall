@@ -38,6 +38,8 @@ check("sni-ok", R.check_sni(OA, "api.openai.com:443", OA, "https"), False)
 check("host-mismatch", R.check_sni(OA, "evil.com", OA, "https"), True)
 check("sni-mismatch", R.check_sni(OA, OA, "evil.com", "https"), True)
 check("sni-missing", R.check_sni(OA, OA, None, "https"), True)
+check("plain-http", R.check_sni(OA, OA, None, "http", 80), True)
+check("https-odd-port", R.check_sni(OA, OA, OA, "https", 8443), True)
 # path normalization
 check("path-ok", R.check_path("/repos/me/x?a=1"), False)
 check("traversal", R.check_path("/repos/me/../../evil/x"), True)

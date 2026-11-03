@@ -103,8 +103,11 @@ def check_destination(host: str) -> str | None:
     return None
 
 
-def check_sni(host: str, host_header: str | None, sni: str | None, scheme: str) -> str | None:
-    """CONNECT target (request.host) = TLS SNI = Host header, else domain fronting."""
+def check_sni(host: str, host_header: str | None, sni: str | None, scheme: str, port: int = 443) -> str | None:
+    """HTTPS on 443 only (a swapped-in real key must never travel in plaintext), and
+    CONNECT target (request.host) = TLS SNI = Host header, else domain fronting."""
+    if scheme != "https" or port != 443:
+        return f"only https on port 443 is allowed (got {scheme} on port {port})"
     hh = re.sub(r":\d+$", "", (host_header or "").lower())
     if hh != host:
         return f"Host header {hh!r} != CONNECT host {host}"

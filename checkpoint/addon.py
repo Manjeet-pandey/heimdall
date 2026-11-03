@@ -114,7 +114,7 @@ async def _decide(flow: http.HTTPFlow, agent: str | None) -> None:
     for who, check in [
         ("hard-rule:size", lambda: R.check_sizes(req.url, header_bytes)),
         ("hard-rule:dest", lambda: R.check_destination(host)),
-        ("hard-rule:sni", lambda: R.check_sni(host, req.host_header, flow.client_conn.sni, req.scheme)),
+        ("hard-rule:sni", lambda: R.check_sni(host, req.host_header, flow.client_conn.sni, req.scheme, req.port)),
         ("hard-rule:encoding", lambda: None if req.headers.get("content-encoding", "identity").lower() == "identity"
          else "encoded request body refused (checks need plaintext)"),
         ("hard-rule:path", lambda: R.check_path(req.path)),

@@ -263,5 +263,19 @@ for host, want in [("api.openai.com", ("mock", 8000)), ("Live.invalid", None)]:
         fails.append(f"real host {host} must take the real DNS path: {d.server}")  # .invalid never resolves
 addon.MOCK, addon.REAL_HOSTS = None, set()
 
+# Plain HTTP (or another port) to an allowed host: blocked before the swap, so the real key never goes out in plaintext.
+for scheme, port in [(b"http", 80), (b"https", 8443)]:
+    req = tutils.treq(host="api.openai.com", port=port, scheme=scheme, method=b"POST", path=b"/v1/chat/completions",
+                      authority=b"", content=b"{}")
+    req.headers.clear()
+    req.headers["Host"], req.headers["Authorization"], req.headers["content-length"] = "api.openai.com", f"Bearer {PH_OA}", "2"
+    f = tflow.tflow(req=req)
+    f.client_conn.sni = None if scheme == b"http" else "api.openai.com"
+    f.metadata["proxyauth"] = ("coder", "pw")
+    asyncio.run(addon.request(f))
+    expect(f"{scheme.decode()}:{port}", f, True, "only https on port 443")
+    if PH_OA not in f.request.headers.get("Authorization", ""):
+        fails.append(f"{scheme.decode()}:{port}: placeholder was swapped for the real key")
+
 print("FAIL" if fails else "ALL PASS", *fails, sep="\n")
 sys.exit(1 if fails else 0)
