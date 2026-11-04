@@ -4,7 +4,7 @@ that sees almost nothing and whose only way out is the checkpoint.
 
     ./heimdall setup                    # once: mitmproxy in a private venv; checks bubblewrap works
     ./heimdall up                       # the checkpoint, as a plain process (./heimdall down stops it)
-    ./heimdall run --agent coder -- claude -p "fix the failing CI"
+    ./heimdall run --agent coder -- python3 my_agent.py
 
 The jail (deny by default):
   - files: system dirs read-only; the work dir (default: current dir) is the only writable place; $HOME is an

@@ -12,7 +12,7 @@ through one checkpoint that checks it, records it, and blocks what looks like a 
 Indie track · Push the Frontier (safe autonomy for agents).
 
 **Built during the hackathon (Oct 28 – Nov 3, 2026).** Everything in this repo was written during the event
-by Manjeet (solo), with AI coding assistants (see [Muse Code log](#muse-code-log)); the git history starts at the first
+by Manjeet (solo), with AI coding assistants; the git history starts at the first
 commit on Oct 28. Used as-is, not ours: [mitmproxy](https://mitmproxy.org) (the proxy engine the checkpoint runs
 inside), Meta's PromptGuard 2 and Llama 3.1 8B (open weights), llama.cpp, Docker and bubblewrap.
 
@@ -208,7 +208,7 @@ its only network is a socket to the checkpoint; it gets a seccomp filter like Do
 ```sh
 sudo apt install bubblewrap python3-seccomp   # Debian / Ubuntu
 ./heimdall setup && ./heimdall up
-./heimdall run --agent coder -- claude -p "fix the failing CI"
+./heimdall run --agent coder -- python3 my_agent.py
 python3 proof/test_sandbox.py --native        # jail escape tests (same probe as Docker's: python3 proof/test_sandbox.py)
 python3 proof/run.py --runs 5 --native        # any proof script takes --native; results in proof/out-native/
 ```
@@ -237,13 +237,6 @@ heimdall      native Linux sandbox (optional): setup / up / run --agent NAME -- 
 Not built, on purpose: Go agent images; OAuth, cookie and AWS-signature credentials; logging file reads inside
 the sandbox; the macOS built-in sandbox (the native jail is Linux only); phone alerts for decisions; drafting a policy
 from one line of plain English; one VM per agent to close same-machine side channels.
-
-## Muse Code log
-
-Coding assistants used while building:
-
-- **Muse Spark via OpenCode** (Oct 30–31): first versions of the Llama retry helper (`attacks/llama_attacker.py`),
-  the demo recorder (`demo/record.py`) and its tests, and a review-page revision that was later rewritten.
 
 ## License
 
