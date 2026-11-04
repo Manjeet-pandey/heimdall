@@ -110,10 +110,13 @@ def decisions_file(db: str) -> str:
 
 def moves(after: int, db: str = DB) -> list[dict]:
     cols = _cols(db)
+    if after and ((query("select max(id) m from moves", path=db) or [{}])[0].get("m") or 0) < after:
+        after = 0  # the log was reset under the page (a new test run numbers from 1 again): send it from the start
     if after:
         rows = query(f"select {cols} from moves where id > ? and {LIVE} order by id limit 300", (after,), db)
-    else:
-        rows = query(f"select {cols} from moves where {LIVE} order by id desc limit 300", path=db)[::-1]
+    else:  # first load: live shows today only (like its summary); the test shows its whole last run
+        since = today() if db == DB else 0
+        rows = query(f"select {cols} from moves where ts >= ? and {LIVE} order by id desc limit 300", (since,), db)[::-1]
     for r in rows:
         r.setdefault("query", "")
         r.setdefault("body", "")
@@ -123,7 +126,8 @@ def moves(after: int, db: str = DB) -> list[dict]:
 
 def summary(db: str = DB) -> dict:
     # Live: today only. Test: the whole last run (proof/run.py wipes it first), whenever it happened.
-    t = today() if db == DB else 0
+    # While a test is starting, the server still holds the last run's log for a few seconds: count from this run's start.
+    t = today() if db == DB else (RUN["started"] or 0) if RUN["proc"] is not None and RUN["proc"].poll() is None else 0
     # The test always runs on the repo's seed policy, so show that one with it.
     policy = load_policy()["agents"] if db == DB else json.loads(POLICY_SEED.read_text())["agents"]
     q = lambda sql, args=(): query(sql, args, db)  # noqa: E731

@@ -48,9 +48,18 @@ h1 { margin: 0; font-size: 1.1rem; letter-spacing: -0.01em; }
 .btn.deny { border-color: var(--stop); color: var(--stop); font-weight: 600; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .running { color: var(--l-muse); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-#toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 0.5rem; z-index: 50; max-width: min(22rem, calc(100vw - 32px)); }
-.toast { background: var(--stop-wash); color: var(--ink); border-left: 4px solid var(--stop); padding: 0.6rem 0.8rem; border-radius: 4px; font-size: 0.85rem; box-shadow: 0 2px 8px #0003; }
-.toast b { color: var(--stop); display: block; }
+/* Toasts pile up like a deck: the newest in front, older ones peeking out behind it. */
+#toasts { position: fixed; right: 24px; bottom: 32px; z-index: 50; width: min(22rem, calc(100vw - 48px)); }
+#toasts .toast { position: absolute; right: 0; bottom: 0; width: 100%; transform-origin: bottom center; transition: transform 0.2s, opacity 0.2s; }
+#toasts .toast:nth-last-child(2) { transform: translateY(-14px) scale(0.95); opacity: 0.8; }
+#toasts .toast:nth-last-child(3) { transform: translateY(-28px) scale(0.9); opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) { #toasts .toast { transition: none; } }
+.toast { background: var(--panel); color: var(--ink); border: 1px solid var(--rule); border-radius: 12px; padding: 0.7rem 0.9rem 0.7rem 2rem;
+  min-height: 4.6rem; display: flex; flex-direction: column; justify-content: center;  /* same height for every card, so the deck shows */
+  font-size: 0.85rem; line-height: 1.35; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08); position: relative; overflow-wrap: anywhere; }
+.toast::before { content: ""; position: absolute; left: 0.9rem; top: 1.05rem; width: 8px; height: 8px; border-radius: 50%; background: var(--stop); box-shadow: 0 0 0 4px var(--stop-wash); }
+.toast b { color: var(--stop); display: block; font-weight: 600; margin-bottom: 0.1rem; }
+.toast div { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
 .notice { padding: 0.45rem 1rem; font-size: 0.85rem; color: var(--muted); border-bottom: 1px solid var(--rule); }
 
 /* ---- the live diagram: requests -> heimdall -> piles ---- */
@@ -61,6 +70,16 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .pile > h2 span { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .pile ol { list-style: none; margin: 0; padding: 0.5rem; overflow-y: auto; display: grid; gap: 0.35rem; align-content: start; flex: 1; }
 .pile .empty { color: var(--muted); padding: 0.4rem 0.3rem; font-size: 0.85rem; }
+/* Load test: a meter instead of a card per request (100 a second is too fast to draw or read). */
+.meter { padding: 0.8rem 0.6rem; display: grid; gap: 0.9rem; }
+.meter .total { font-size: 2.6rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.meter .rate { color: var(--muted); font-variant-numeric: tabular-nums; }
+.meter .split { display: flex; gap: 1.2rem; font-variant-numeric: tabular-nums; }
+.meter .split b { display: block; font-size: 1.3rem; }
+.meter .ok b { color: var(--pass); } .meter .no b { color: var(--stop); }
+.meter .bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.meter .bar i { display: block; height: 100%; background: var(--stop); }
+.meter p { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .pile.allowed > h2 { color: var(--pass); } .pile.blocked > h2 { color: var(--stop); } .pile.waiting > h2 { color: var(--wait); }
 .pile.waiting { flex: 0 1 auto; max-height: 34%; }
 .pile.waiting:has(ol:empty) { display: none; }
@@ -200,6 +219,53 @@ pre.log:empty { display: none; }
   .versus { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .fly { display: none; } .layer { transition: none; } }
+/* About: a landing page for Heimdall (what it is, how it works, measured results). */
+#about-view .wrap { max-width: 64rem; padding-top: 0; }
+.lp section { padding: 3.5rem 0; border-top: 1px solid var(--rule); }
+.lp section:first-child { border-top: 0; padding-top: 4.5rem; }
+.lp .eyebrow { margin: 0 0 0.6rem; color: var(--l-muse); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.lp h2 { margin: 0 0 1.2rem; font-size: clamp(1.5rem, 3vw, 2.2rem); letter-spacing: -0.01em; line-height: 1.15; }
+.lp p { margin: 0; }
+.lp .lede { font-size: clamp(1.05rem, 1.8vw, 1.3rem); color: var(--muted); max-width: 46rem; }
+.hero .name { margin: 0; font-size: clamp(3rem, 9vw, 6rem); letter-spacing: -0.035em; line-height: 0.95; }
+.hero .tagline { margin: 1rem 0 0; font-size: clamp(1.3rem, 3vw, 2.1rem); letter-spacing: -0.01em; max-width: 30ch; }
+.hero .story { margin-top: 1.4rem; }
+.hero .pills { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.8rem; }
+.hero .pills span { border: 1px solid var(--rule); background: var(--panel); border-radius: 999px; padding: 0.3rem 0.85rem; font-size: 0.85rem; }
+.hero .cta { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.8rem; }
+.hero .fine { margin-top: 1.4rem; color: var(--muted); font-size: 0.85rem; }
+.flow3 { display: grid; grid-template-columns: 1fr auto 1.35fr auto 1fr; gap: 0.9rem; align-items: center; margin-top: 0.4rem; }
+.flow3 .node { background: var(--panel); border: 1px solid var(--rule); border-radius: 14px; padding: 1.1rem; text-align: center; }
+.flow3 .node.gate { border: 2px solid var(--l-muse); }
+.flow3 .node b { display: block; font-size: 1.15rem; margin-bottom: 0.25rem; }
+.flow3 .node small { display: block; color: var(--muted); font-size: 0.85rem; }
+.flow3 .arr { font-size: 1.6rem; color: var(--muted); }
+.flow3 .tag { display: inline-block; margin-top: 0.6rem; padding: 0.15rem 0.5rem; border-radius: 6px; font: 0.8rem var(--mono); background: var(--panel-2); }
+.flow3 .tag.real { background: var(--pass-wash); color: var(--pass); font-family: var(--sans); }
+.flow3 .chain { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: center; margin-top: 0.6rem; }
+.flow3 .chain span { border: 1px solid var(--rule); border-radius: 6px; padding: 0.15rem 0.45rem; font-size: 0.8rem; }
+.flow3 .chain .m { border-color: var(--l-muse); color: var(--l-muse); }
+.flow3 .chain .x { border-color: var(--stop); color: var(--stop); }
+.feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9rem; margin-top: 1.8rem; }
+.feat { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 1rem; }
+.feat b { display: block; margin-bottom: 0.3rem; }
+.feat p { color: var(--muted); font-size: 0.9rem; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+.fact { background: var(--panel); border: 1px solid var(--rule); border-radius: 14px; padding: 1.2rem 1.3rem; }
+.fact .k { color: var(--muted); font-size: 0.9rem; }
+.fact .v { font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin: 0.25rem 0; }
+.fact .d { color: var(--muted); font-size: 0.88rem; }
+.fact.bad .v { color: var(--stop); }
+.fact.good .v { color: var(--pass); }
+.lp .note { margin-top: 1rem; color: var(--muted); font-size: 0.85rem; }
+.limit { background: var(--wait-wash); border-left: 4px solid var(--wait); border-radius: 8px; padding: 1rem 1.2rem; max-width: 46rem; }
+.lp pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 1rem 1.2rem; overflow-x: auto; font: 0.9rem/1.6 var(--mono); }
+.lp pre .c { color: var(--muted); }
+.lp footer { padding: 2rem 0 1rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.85rem; }
+@media (max-width: 760px) {
+  .flow3, .facts, .feats { grid-template-columns: 1fr; }
+  .flow3 .arr { transform: rotate(90deg); justify-self: center; }
+}
 </style>
 </head>
 <body>
@@ -210,6 +276,7 @@ pre.log:empty { display: none; }
     <button type="button" data-view="home" aria-pressed="true">Overview</button>
     <button type="button" data-view="live" aria-pressed="false">Live</button>
     <button type="button" data-view="rules" aria-pressed="false">Rules</button>
+    <button type="button" data-view="about" aria-pressed="false">About</button>
   </div>
   <div class="status" aria-live="polite">
     <span id="st-traffic"><span class="dot"></span>No traffic yet</span>
@@ -249,6 +316,72 @@ pre.log:empty { display: none; }
   </div>
 </section>
 <section class="page" id="rules-view" hidden><div class="wrap" id="rules-body"></div></section>
+
+<section class="page" id="about-view" hidden aria-label="About Heimdall"><div class="wrap lp">
+  <section class="hero">
+    <p class="eyebrow">Safe autonomy for AI agents</p>
+    <p class="name">Heimdall</p>
+    <p class="tagline">A checkpoint between your AI agents and the internet.</p>
+    <p class="lede story">AI agents read things they can't trust (issues, web pages, email) while holding your real API keys.
+      One hidden instruction can turn them against you. Heimdall assumes that will happen and controls the only way out.</p>
+    <div class="cta">
+      <button type="button" class="btn primary" data-go="home">See it work</button>
+      <button type="button" class="btn" data-go="live">Watch live</button>
+    </div>
+    <div class="pills"><span>Built with Muse Spark</span><span>Muse Wonder</span><span>PromptGuard 2</span><span>Llama as the attacker</span></div>
+    <p class="fine">Built solo by Manjeet during the Meta Global AI Developer Hackathon (Oct 28 – Nov 3, 2026) · Indie track · Push the Frontier</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">How it works</p>
+    <h2>Every request leaves through one checkpoint</h2>
+    <div class="flow3">
+      <div class="node"><b>Agent</b><small>sealed sandbox<br>no internet, no DNS</small><span class="tag">gw_ph_openai_x7f3</span></div>
+      <div class="arr" aria-hidden="true">→</div>
+      <div class="node gate"><b>Heimdall</b><small>checks · records · blocks</small>
+        <div class="chain"><span>hard rules</span><span class="m">Muse Spark</span><span class="m">Muse Wonder</span><span class="x">unsure = deny</span></div></div>
+      <div class="arr" aria-hidden="true">→</div>
+      <div class="node"><b>Internet</b><small>only allowed sites</small><span class="tag real">real key, right site only</span></div>
+    </div>
+    <div class="feats">
+      <div class="feat"><b>Placeholder keys</b><p>The agent never holds a real key. Heimdall swaps it in only for the one site it belongs to, over https. A placeholder seen anywhere else is a tripwire.</p></div>
+      <div class="feat"><b>Hard rules first</b><p>Allowed sites, no IP literals or private addresses, no other people's keys, no data smuggled through the AI provider, size caps and byte budgets.</p></div>
+      <div class="feat"><b>Muse reviews the rest</b><p>Muse Spark judges anything new and reads every write against the agent's task and history. When Spark isn't sure, Muse Wonder decides.</p></div>
+      <div class="feat"><b>Fails closed</b><p>If Meta's API is down, nothing new gets out. An unsure model means no.</p></div>
+      <div class="feat"><b>PromptGuard 2</b><p>Scans what the agent reads. A hidden instruction puts the agent in strict mode: nothing new leaves without you.</p></div>
+      <div class="feat"><b>Every byte counted</b><p>Each request is logged with its reason, and bytes out are counted per agent and destination.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Results</p>
+    <h2>Measured, not claimed</h2>
+    <div class="facts">
+      <div class="fact bad"><div class="k">Without Heimdall</div><div class="v">5 of 5</div><div class="d">runs where the keys were stolen</div></div>
+      <div class="fact good"><div class="k">With Heimdall</div><div class="v">0 of 5</div><div class="d">runs leaked, in all 3 attack types · the real task still finished 5 of 5</div></div>
+      <div class="fact good"><div class="k">Rogue Llama agent, adapting to every block</div><div class="v">0 of 5</div><div class="d">runs got the secret out · it found two real holes, both fixed</div></div>
+      <div class="fact"><div class="k">Under load, ~90 requests a second</div><div class="v">171 / 171</div><div class="d">attacks blocked · 5 wrong blocks in 17,814 normal requests · ~$0.002 per Muse review</div></div>
+    </div>
+    <p class="note">Mock internet and fake keys only. Full numbers in the README.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Honest limit</p>
+    <h2>What still gets through</h2>
+    <p class="limit">A secret split into tiny pieces, inside the size limits, across normal-looking comments on an allowed site.
+      Heimdall doesn't stop that yet, but it counts and charts every piece, so you can see it happen.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Try it</p>
+    <h2>One command</h2>
+<pre><span class="c"># Docker, Python 3.10+ and a Meta Model API key in .env.secrets</span>
+./start.sh
+<span class="c"># then open http://127.0.0.1:8000 and press Run</span></pre>
+  </section>
+
+  <footer>Heimdall · MIT license · Built with Muse Spark</footer>
+</div></section>
 
 <main id="stage" hidden>
   <section class="col">
@@ -292,9 +425,9 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
                 set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 let src = store.get("heimdall-src") === "test" ? "test" : "live";
-let view = ["home", "live", "rules"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "home";
+let view = ["home", "live", "rules", "about"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "home";
 let SUMMARY = null, PROOF = null;
-let AGENTS = {}, RUNNER = false;
+let AGENTS = {}, RUNNER = false, RUNNING = false, RUN_STARTED = 0, RUN_JOB = null;
 
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Heimdall": "1" }, body: JSON.stringify(body) });
@@ -413,19 +546,42 @@ function card(m, pending) {
 }
 const li = (child) => { const x = el("li"); x.append(child); return x; };
 
+const loadMode = () => RUNNING && RUN_JOB === "load" && src === "test";
+function renderMeter() {
+  const passed = SUMMARY ? SUMMARY.passed : 0, stopped = SUMMARY ? SUMMARY.stopped : 0, total = passed + stopped;
+  const now = all.length ? all[all.length - 1].ts : 0;
+  const rate = Math.round(all.filter((m) => m.ts > now - 3).length / 3);  // last 3 s (old allowed cards are trimmed, these aren't)
+  const box = el("li", "meter");
+  const bar = el("div", "bar"), fill = el("i");
+  fill.style.width = `${total ? Math.max(0.5, (100 * stopped) / total) : 0}%`;
+  bar.append(fill);
+  const split = el("div", "split");
+  const ok = el("div", "ok"), no = el("div", "no");
+  ok.append(el("b", null, passed.toLocaleString()), "allowed");
+  no.append(el("b", null, stopped.toLocaleString()), "blocked");
+  split.append(ok, no);
+  box.append(el("div", "total", total.toLocaleString()), el("div", "rate", total ? `about ${rate} requests a second` : "starting…"), split, bar,
+    el("p", null, "Load test: a busy agent at about 100 requests a second, with attacks mixed in. Allowed requests are counted, not drawn one by one; everything blocked is listed on the right."));
+  $("in").replaceChildren(box);
+  $("c-in").textContent = "";
+}
 function render() {
   const piles = { wait: [], pass: [], stop: [] };
   for (const m of all) if (landed.has(m.id)) piles[pileOf(m)].push(m);
-  const newest = (xs) => xs.slice(-60).reverse();
-  $("in").replaceChildren(...newest(all).map((m) => li(card(m, !landed.has(m.id)))));
-  $("c-in").textContent = all.length || "";
+  const newest = (xs, n = 60) => xs.slice(-n).reverse();
+  if (loadMode()) renderMeter();
+  else {
+    $("in").replaceChildren(...newest(all).map((m) => li(card(m, !landed.has(m.id)))));
+    $("c-in").textContent = all.length || "";
+  }
   for (const k of ["wait", "pass", "stop"]) {
-    $(`p-${k}`).replaceChildren(...newest(piles[k]).map((m) => li(card(m))));
+    $(`p-${k}`).replaceChildren(...newest(piles[k], loadMode() && k === "pass" ? 12 : 60).map((m) => li(card(m))));
     $(`c-${k}`).textContent = piles[k].length || "";
   }
+  if (loadMode() && SUMMARY) { $("c-pass").textContent = SUMMARY.passed.toLocaleString(); $("c-stop").textContent = SUMMARY.stopped.toLocaleString(); }
   renderHome(piles);
-  if (!all.length) $("in").replaceChildren(el("li", "empty", src === "test"
-    ? "No attack test has run yet. Press Run attack."
+  if (!all.length && !loadMode()) $("in").replaceChildren(el("li", "empty", src === "test"
+    ? (RUNNING ? "Starting the test: the sandbox and checkpoint restart in test mode first (about 5 s), then requests show up here." : "No attack test has run yet. Press Run.")
     : "No requests yet. When your agents send anything, it shows up here and flies through Heimdall."));
 }
 
@@ -454,7 +610,7 @@ function renderHome(piles) {
   const when = src === "test" ? "In the last attack test" : "Today";
   const wait = piles.wait.length, h = $("headline");
   const out = s.budget.reduce((n, b) => n + b.used, 0);
-  if (!s.passed && !s.stopped) h.textContent = src === "test" ? "No attack test has run yet. Press Run attack to see one." : "Quiet so far: your agents haven't sent anything today.";
+  if (!s.passed && !s.stopped) h.textContent = src === "test" ? (RUNNING ? "Starting the test: the sandbox and checkpoint restart in test mode first (about 5 s), then requests show up here." : "No attack test has run yet. Press Run to see one.") : "Quiet so far: your agents haven't sent anything today.";
   else h.replaceChildren(`${when}, `, el("span", "s", `${plural(s.stopped, "request")} blocked`), " and ", el("span", "p", `${s.passed} allowed`),
     wait ? "; " : ".", ...(wait ? [el("span", "w", `${plural(wait, "needs", "need")} you`), "."] : []));
   if (s.muse.state === "down") h.append(el("span", "w", " Muse can't be reached, so anything new is blocked."));
@@ -538,32 +694,50 @@ async function drain() {
   flying = true;
   while (queue.length) {
     const m = queue.shift();
-    if (view === "live" && queue.length < 12 && !reduceMotion && !document.hidden) await fly(m);
-    landed.add(m.id);
-    render();
+    if (view === "live" && queue.length < 12 && !loadMode() && !reduceMotion && !document.hidden) {
+      await fly(m);  // a few at a time: each one flies through Heimdall into its pile
+      landed.add(m.id);
+      render();
+    } else landed.add(m.id);  // a burst (load test): land them all, then draw once
   }
+  render();
   flying = false;
 }
 
-function toast(m) {
-  const t = el("div", "toast"), e = explain(m);
+// Toasts pile up as a deck of at most 3 (the oldest goes first), one per batch of blocks that arrive together.
+function toast(blocked) {
+  if (!blocked.length) return;
+  const m = blocked[blocked.length - 1], t = el("div", "toast"), e = explain(m);
   t.append(el("b", null, e.title), `${m.method} ${m.host}${m.path || ""}`.slice(0, 90));
-  $("toasts").append(t);
-  setTimeout(() => t.remove(), 6000);
+  if (blocked.length > 1) t.append(el("div", null, `+${blocked.length - 1} more blocked`));
+  const box = $("toasts");
+  box.append(t);
+  while (box.children.length > 3) box.firstElementChild.remove();
+  setTimeout(() => t.remove(), 4000);
 }
 
 // ---- polling ----
 const qs = () => `src=${src}`;
+// Keep the page light under load (100 requests a second) without losing what matters: drop the oldest allowed
+// requests first; blocked, flagged and waiting ones stay until the page is reloaded.
+function trim(xs, max = 500) {
+  let extra = xs.length - max;
+  return extra <= 0 ? xs : xs.filter((m) => extra <= 0 || explain(m).kind !== "pass" || (extra--, false));
+}
 async function pollMoves() {
   const asked = src;
   const got = await getJSON(`/api/moves?after=${lastId}&${qs()}`);
   if (asked !== src) return;
-  const rows = got.filter((m) => m.id > lastId);
+  // The log was reset under us (a new test run numbers from 1 again): start the piles over instead of skipping it.
+  if (got.length && got[0].id <= lastId) { all = []; lastId = 0; landed.clear(); queue.length = 0; waitingIds = new Set(); }
+  // While a test runs, skip anything logged before it started: for its first seconds the server still holds the
+  // previous run's log.
+  const rows = got.filter((m) => m.id > lastId && !(src === "test" && RUN_STARTED && m.ts < RUN_STARTED));
   if (!rows.length && booted) return;
   rows.forEach((m) => (lastId = Math.max(lastId, m.id)));
-  all = all.concat(rows).slice(-500);
+  all = trim(all.concat(rows));
   if (!booted) rows.forEach((m) => landed.add(m.id)); // first load: everything is already in its pile
-  else { queue.push(...rows); rows.filter((m) => m.verdict === "block").slice(-3).forEach(toast); }
+  else { queue.push(...rows); toast(rows.filter((m) => m.verdict === "block")); }
   booted = true;
   render();
   drain();
@@ -597,6 +771,7 @@ async function pollSummary() {
     box.append(row);
   }
   box.prepend(el("div", "row", "Data sent out"));
+  if (loadMode()) renderMeter();  // the meter's totals come from here: redraw it even before any request arrives
 }
 async function pollEscalations() {
   const e = await getJSON(`/api/escalations?${qs()}`);
@@ -737,13 +912,16 @@ async function startJob(job) {
     return;
   }
   try {
+    RUN_STARTED = Date.now() / 1000;  // before the post: a feed poll in between must not pull in the last run
+    if (src === "test") SUMMARY = null;  // the last run's totals must not show while this one starts
     await post("/api/run", { job, runs: 1 });
     notice(null);
     if (src !== "test") setSrc("test");
     else { all = []; lastId = 0; booted = true; landed.clear(); queue.length = 0; render(); }
     if (job === "rogue") { show("live"); openRogue(); }
-    pollRun();
-  } catch (e) { notice(e.message); }
+    await pollRun();
+    pollSummary();  // the server now counts from this run's start: show the reset at once, not on the next tick
+  } catch (e) { RUN_STARTED = 0; notice(e.message); }
 }
 $("run").onclick = () => startJob($("run-job").value);
 
@@ -798,6 +976,9 @@ async function pollRun() {
   const r = await getJSON("/api/run");
   RUNNER = r.runner;
   const on = r.running;
+  RUN_JOB = on ? r.job : null;
+  if (on) RUN_STARTED = r.started; else if (RUNNING) RUN_STARTED = 0;  // cleared only once a run has ended
+  if (on !== RUNNING) { RUNNING = on; render(); }
   $("run").disabled = on;
   $("stop").hidden = !on;
   $("running").hidden = !on;
@@ -877,11 +1058,14 @@ function show(v) {
   $("home").hidden = v !== "home";
   $("stage").hidden = v !== "live";
   $("rules-view").hidden = v !== "rules";
+  $("about-view").hidden = v !== "about";
   if (location.hash !== `#${v}`) history.replaceState(null, "", `#${v}`);
   if (v === "rules") openRules();
 }
 document.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => show(b.dataset.view)));
 $("h-to-live").onclick = () => show("live");
+
+document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => show(b.dataset.go)));
 
 // ---- results: the with/without proof ----
 const ATTACKS = {
