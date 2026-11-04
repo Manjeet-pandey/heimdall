@@ -104,9 +104,6 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .layer .n { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
 .layer.hit-pass { background: var(--pass-wash); } .layer.hit-stop { background: var(--stop-wash); } .layer.hit-wait { background: var(--wait-wash); }
 .l-rules { background: var(--l-rules); } .l-muse { background: var(--l-muse); } .l-pg { background: var(--l-pg); } .l-you { background: var(--l-you); }
-.budget { border-top: 1px solid var(--rule); padding-top: 0.5rem; margin-top: 0.2rem; display: grid; gap: 0.35rem; font-size: 0.76rem; }
-.budget .row { display: flex; justify-content: space-between; gap: 0.5rem; color: var(--muted); }
-.budget .row b { color: var(--ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--pass); }
 .bar i.hot { background: var(--stop); }
@@ -397,7 +394,6 @@ pre.log:empty { display: none; }
     <div class="layer" data-layer="muse"><i class="l-muse"></i>Muse<span class="n" id="n-muse">0</span></div>
     <div class="layer" data-layer="pg"><i class="l-pg"></i>PromptGuard<span class="n" id="n-pg">0</span></div>
     <div class="layer" data-layer="you"><i class="l-you"></i>You<span class="n" id="n-you">0</span></div>
-    <div class="budget" id="budget"></div>
   </section>
   <div class="arrow" aria-hidden="true"></div>
   <section class="col">
@@ -758,19 +754,6 @@ async function pollSummary() {
     mu.state === "up" ? `Muse online${mu.latency_ms ? `, ${(mu.latency_ms / 1000).toFixed(1)} s` : ""}` : mu.state === "down" ? "Muse unreachable: new requests are blocked" : "Muse idle");
   $("st-watch").hidden = !s.strict.length;
   $("st-watch").replaceChildren(el("span", "dot warn"), `${s.strict.map((x) => x.agent).join(", ")} under watch (read hidden instructions)`);
-  const box = $("budget");
-  box.replaceChildren();
-  for (const b of s.budget) {
-    const row = el("div"), head = el("div", "row"), bar = el("div", "bar"), fill = el("i");
-    head.append(el("b", null, `${b.agent} → ${b.dest || "new sites"}`), el("span", null, b.cap ? `${fmtBytes(b.used)} / ${fmtBytes(b.cap)}` : "none allowed"));
-    const pct = b.cap ? Math.min(100, (b.used / b.cap) * 100) : b.used ? 100 : 0;
-    fill.style.width = `${Math.max(pct, b.used ? 2 : 0)}%`;
-    if (pct >= 80) fill.className = "hot";
-    bar.append(fill);
-    row.append(head, bar);
-    box.append(row);
-  }
-  box.prepend(el("div", "row", "Data sent out"));
   if (loadMode()) renderMeter();  // the meter's totals come from here: redraw it even before any request arrives
 }
 async function pollEscalations() {
