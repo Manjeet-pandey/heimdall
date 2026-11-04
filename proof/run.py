@@ -9,6 +9,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -69,6 +71,23 @@ def wait_http(url: str, timeout: int = 120) -> None:
     raise SystemExit(f"timed out waiting for {url}: {last}")
 
 
+def wait_proxy(port: int = 8080, timeout: int = 120) -> None:
+    """Wait until the checkpoint's proxy answers. A malformed request gets mitmproxy's own 400 and never reaches
+    Heimdall's log; a normal GET would show up on the review page as a blocked request at the start of every run."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+                s.sendall(b"HEIMDALL-PROBE\r\n\r\n")
+                if s.recv(16).startswith(b"HTTP/"):
+                    return
+        except OSError as e:
+            last = e
+        time.sleep(1)
+    raise SystemExit(f"timed out waiting for the proxy on {port}: {last}")
+
+
 def agent_exec(cmd: list, env: dict, input: str | None = None, timeout: float | None = None,
                check: bool = False) -> subprocess.CompletedProcess:
     """Run cmd as the coder agent inside its jail, test scripts mounted read-only at /attacks."""
@@ -84,19 +103,27 @@ def agent_exec(cmd: list, env: dict, input: str | None = None, timeout: float | 
     return r
 
 
-def stack_begin() -> bool:
-    """Stop the normal stack for a test run; returns whether it was up, for stack_end."""
+def stack_begin() -> bool | list[str]:
+    """Stop the normal stack for a test run; returns what was up (the running services, or True/False), for stack_end."""
+    # The review page's Stop sends SIGTERM. Turn it into a normal exit so every caller's `finally: stack_end()` runs:
+    # that stops the test stack (and the traffic generator inside the agent's box) and puts the normal stack back.
+    if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:  # the attack loop installs its own graceful stop first
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if NATIVE:
         was_up = hd.is_up()
         hd.down()
         return was_up
-    # Was the normal stack up? (ps takes no service filter under podman-compose: any container counts.)
-    was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
+    # Which services were running, so stack_end gives back exactly those (./start.sh keeps the review container off).
+    r = subprocess.run(PLAIN + ["ps", "--services", "--status", "running"], capture_output=True, text=True)
+    if r.returncode == 0:
+        was_up = r.stdout.split()
+    else:  # podman-compose: no status filter, so any container counts and everything comes back
+        was_up = bool(subprocess.run(PLAIN + ["ps", "-q"], capture_output=True, text=True).stdout.strip())
     subprocess.run(COMPOSE + ["down"], check=True, capture_output=True)
     return was_up
 
 
-def stack_end(was_up: bool) -> None:
+def stack_end(was_up: bool | list[str]) -> None:
     """Even after a crash: never leave the stack in attack mode, and give back what was running."""
     if NATIVE:
         hd.down()
@@ -106,7 +133,7 @@ def stack_end(was_up: bool) -> None:
     subprocess.run(COMPOSE + ["down"], capture_output=True)
     if was_up:
         print("restarting your normal stack", file=sys.stderr)
-        subprocess.run(PLAIN + ["up", "-d"], check=True, capture_output=True)
+        subprocess.run(PLAIN + ["up", "-d"] + (was_up if isinstance(was_up, list) else []), check=True, capture_output=True)
 
 
 def wait_exec(timeout: int = 120) -> None:
@@ -129,7 +156,7 @@ def up(cond: str) -> None:
     subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "guard", "checkpoint", "mock", "coder"],
                    env=env, check=True, capture_output=True)
     wait_http("http://127.0.0.1:18001/")  # mock admin answers 200
-    wait_http("http://127.0.0.1:8080/")   # proxy port answers (400 to non-proxy requests)
+    wait_proxy()
     wait_exec()
 
 
@@ -152,7 +179,7 @@ def fresh_checkpoint(cond: str) -> None:
         return
     subprocess.run(COMPOSE + ["up", "-d", "--force-recreate", "--no-deps", "checkpoint"],
                    env=env, check=True, capture_output=True)
-    wait_http("http://127.0.0.1:8080/")
+    wait_proxy()
 
 
 def archive(name: str) -> None:

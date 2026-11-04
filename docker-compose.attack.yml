@@ -16,6 +16,7 @@ services:
   mock:
     image: python:3.12-slim
     command: python /attacks/mock_server.py
+    init: true  # stops in well under a second instead of the 10 s kill timeout
     environment:
       - HEIMDALL_ATTACKER_URL=${HEIMDALL_ATTACKER_URL:-https://ci-diagnostics.test/c}
     user: "10000:10000"

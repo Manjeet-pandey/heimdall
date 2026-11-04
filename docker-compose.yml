@@ -84,6 +84,7 @@ services:
       dockerfile: guard.Dockerfile
     image: heimdall-guard
     command: python /app/guard.py
+    init: true  # forwards the stop signal: python as PID 1 ignores it, so every stop waited 10 s
     user: "10000:10000"
     read_only: true
     tmpfs: [/tmp]
@@ -99,6 +100,7 @@ services:
   review:
     image: python:3.12-slim
     command: python /app/review/app.py
+    init: true  # stops in well under a second instead of the 10 s kill timeout
     user: "10000:10000"
     read_only: true
     working_dir: /app
